@@ -1,0 +1,135 @@
+name: Auto release on version bump
+
+# Fires on merge of ANY PR to main. Exits early unless package.json's
+# `version` field differs from the parent commit's. When the version
+# did change, this workflow builds + smoke-tests, creates the matching
+# `vX.Y.Z` tag + GitHub release (CHANGELOG section extracted as notes),
+# and runs `npm publish --access public --provenance` inline.
+#
+# Why inline-publish rather than relying on `publish.yml` + `release:
+# published` trigger: GitHub doesn't fire downstream workflows for
+# events created by GITHUB_TOKEN (loop protection). Hit on deepdive
+# v0.3.0 — the auto-created release didn't kick publish.yml, required
+# a manual delete+recreate from a human token. Same pattern baked in
+# here preemptively.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  # id-token: write required for `npm publish --provenance` SLSA
+  # attestation.
+  id-token: write
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (post-merge state)
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: main
+          fetch-depth: 2  # need HEAD^1 for the version-diff check
+
+      - name: Check if version actually changed
+        id: ver
+        run: |
+          set -eo pipefail
+          CURRENT=$(node -pe "require('./package.json').version")
+          PARENT=$(git show HEAD^1:package.json 2>/dev/null \
+            | node -pe "JSON.parse(require('fs').readFileSync(0,'utf-8')).version" \
+            || echo "")
+          if [ "$CURRENT" = "$PARENT" ]; then
+            echo "Version unchanged at $CURRENT — not releasing."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Refusing to release — package.json version '$CURRENT' doesn't match X.Y.Z" >&2
+            exit 1
+          fi
+          echo "Version bumped: $PARENT → $CURRENT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag doesn't already exist
+        if: steps.ver.outputs.changed == 'true'
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — aborting to avoid tag-overwrite."
+            exit 1
+          fi
+
+      - name: Set up Node
+        if: steps.ver.outputs.changed == 'true'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: npm ci
+        if: steps.ver.outputs.changed == 'true'
+        run: npm ci
+
+      - name: typecheck
+        if: steps.ver.outputs.changed == 'true'
+        run: npm run typecheck
+
+      - name: build
+        if: steps.ver.outputs.changed == 'true'
+        run: npm run build
+
+      - name: --help smoke
+        if: steps.ver.outputs.changed == 'true'
+        run: node dist/cli.js --help
+
+      - name: Extract release notes from CHANGELOG
+        if: steps.ver.outputs.changed == 'true'
+        run: |
+          set -eo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          node -e "
+            const fs = require('fs');
+            const md = fs.existsSync('CHANGELOG.md') ? fs.readFileSync('CHANGELOG.md', 'utf-8') : '';
+            const re = new RegExp('^## \\\\[' + '${VERSION}' + '\\\\][^\\\\n]*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## \\\\[|$)', 'm');
+            const m = re.exec(md);
+            process.stdout.write(m ? m[1].trim() : '(no changelog section found for this version)');
+          " > release-notes.md
+          echo "--- release-notes.md ---"
+          cat release-notes.md
+
+      - name: Create GitHub release
+        if: steps.ver.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          {
+            echo "Auto-released from merge of [PR #${{ github.event.pull_request.number }}](${{ github.event.pull_request.html_url }})."
+            echo ""
+            cat release-notes.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "Built + tested + npm-published inline by \`auto-release.yml\` on this run."
+          } > body.md
+
+          gh release create "$TAG" --title "$TAG" --notes-file body.md
+
+      - name: npm publish
+        if: steps.ver.outputs.changed == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+
+      - name: Post-release summary
+        if: steps.ver.outputs.changed == 'true'
+        run: |
+          echo "✓ Released v${{ steps.ver.outputs.version }}"
+          echo "✓ Triggered by PR #${{ github.event.pull_request.number }}"
+          echo "✓ Published to npm (with SLSA provenance)"
