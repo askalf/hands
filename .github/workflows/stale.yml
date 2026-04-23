@@ -1,0 +1,42 @@
+name: Stale issue / PR housekeeping
+
+# Low-key housekeeping. 60 days to warn, 14 more to close. Exempt
+# labels keep security reports + in-flight work out of the sweep.
+
+on:
+  schedule:
+    - cron: '30 4 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@b5d41d4e1d5dceea10e7104786b73624c18a190f # v10.2.0
+        with:
+          days-before-stale: 60
+          days-before-close: 14
+          stale-issue-label: stale
+          stale-pr-label: stale
+          stale-issue-message: >
+            No activity on this issue for 60 days. Marking as stale. If
+            it's still relevant, leave a comment and we'll take another
+            look — otherwise it'll auto-close in 14 days.
+          stale-pr-message: >
+            No activity on this PR for 60 days. Marking as stale. If
+            it's still in flight, leave a comment or push an update —
+            otherwise it'll auto-close in 14 days.
+          close-issue-message: >
+            Auto-closing after 14 days of no follow-up. Feel free to
+            reopen if the issue recurs or you have new information.
+          close-pr-message: >
+            Auto-closing after 14 days of no follow-up. Feel free to
+            reopen if you want to pick the work back up.
+          exempt-issue-labels: security,auth,review-feedback,help-wanted,good-first-issue,pinned
+          exempt-pr-labels: security,pinned,wip,blocked
+          operations-per-run: 60
+          remove-stale-when-updated: true

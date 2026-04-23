@@ -1,0 +1,33 @@
+name: actionlint
+
+# Validates GitHub Actions workflow YAML against actionlint's rule set.
+# Runs on every PR + push (no path filter, since path-filtered required-
+# checks never report on PRs outside the filter — classic footgun fixed
+# on dario + claude-bridge + deepdive already).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Install actionlint v1.7.1
+        run: |
+          set -euo pipefail
+          curl -fsSL -o actionlint.tgz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.1/actionlint_1.7.1_linux_amd64.tar.gz
+          tar xzf actionlint.tgz actionlint
+          chmod +x actionlint
+          ./actionlint -version
+
+      - name: Run actionlint
+        run: ./actionlint -color
