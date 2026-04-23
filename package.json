@@ -1,0 +1,64 @@
+{
+  "name": "@askalf/hands",
+  "version": "0.1.0",
+  "description": "Computer-use agent. Your LLM on your mouse, keyboard, and screen. PowerShell-first, voice optional, safety guardrails. Routes through dario or any Anthropic-compat endpoint.",
+  "main": "./dist/cli.js",
+  "types": "./dist/cli.d.ts",
+  "type": "module",
+  "bin": {
+    "hands": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "commander": "^13.1.0",
+    "chalk": "^5.4.1",
+    "inquirer": "^12.4.2",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-code": "*"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-code": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "author": "askalf",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/askalf/hands.git"
+  },
+  "bugs": {
+    "url": "https://github.com/askalf/hands/issues"
+  },
+  "homepage": "https://github.com/askalf/hands#readme",
+  "keywords": [
+    "ai",
+    "agent",
+    "computer-use",
+    "claude",
+    "anthropic",
+    "automation",
+    "voice-control",
+    "powershell",
+    "dario",
+    "local"
+  ],
+  "private": true
+}
