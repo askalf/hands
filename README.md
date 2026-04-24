@@ -17,23 +17,19 @@ Requires Node.js 20+ and [Claude CLI](https://docs.anthropic.com/en/docs/claude-
 ## Quick Start
 
 ```bash
-# 1. Install Claude CLI (if you don't have it)
-npm i -g @anthropic-ai/claude-code
-claude auth login
+# 1. One-shot interactive setup — auth + voice (optional) + dario routing tips
+hands init
 
-# 2. Authenticate
-hands auth
-# Select "Claude Login" (recommended)
-
-# 3. Run
+# 2. Run
 hands run "open notepad and type hello world"
 
-# 4. Voice mode — talk to your computer
-hands voice-setup          # one-time: downloads whisper.cpp
+# 3. Voice mode — talk to your computer (if you said yes to voice during init)
 hands run "open notepad" --voice
 ```
 
-That's it. Claude opens Notepad, types "Hello World", then asks **"What next?"** — type or speak your next command.
+`hands init` walks through every choice the CLI asks you to make: installing the `claude` CLI if missing (needed for zero-per-token Claude Login mode), picking auth mode, optionally downloading whisper.cpp for voice, and — if you're on API Key mode — nudging you toward routing through [dario](https://github.com/askalf/dario) for zero per-token cost. Safe to re-run at any time.
+
+Then Claude opens Notepad, types "Hello World", and asks **"What next?"** — type or speak your next command.
 
 ## How It Works
 
@@ -109,6 +105,16 @@ hands run "open notepad"
 Verify the routing is live with `hands check` (reports the effective base URL) or by watching `dario proxy -v` while hands is running — a request should show up in dario's log. Claude Login mode (the default) spawns the `claude` CLI child process directly, so the env-var-routing flow only matters for SDK mode.
 
 ## Commands
+
+### `hands init`
+
+Interactive first-run wizard. One command covers every choice hands asks a new user to make before their first `hands run`: install `claude` CLI if missing, pick auth mode (Claude Login vs API Key), optionally download whisper.cpp for voice, and — if you're on API Key mode — surface the dario routing tip for zero per-token cost. Delegates to the same `hands auth` / `hands voice-setup` flows the individual commands use, so there's no duplicated logic.
+
+```bash
+hands init
+```
+
+Safe to re-run — every step asks before changing anything, and defaults reflect current config. Environment snapshot at the top shows what's already installed so you know what will be skipped.
 
 ### `hands run "<prompt>"`
 

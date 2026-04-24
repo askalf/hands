@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { authInteractive, showAuthStatus } from './auth.js';
+import { initInteractive } from './init.js';
 import { run } from './run.js';
 import { checkPlatform } from './platform/index.js';
 import { loadConfig, saveConfig } from './util/config.js';
@@ -22,6 +23,13 @@ program
   .name('hands')
   .description('Open source computer-use agent — control your computer with natural language')
   .version(pkg.version);
+
+program
+  .command('init')
+  .description('Interactive first-run setup: auth, voice (optional), dario routing tips. Safe to re-run.')
+  .action(async () => {
+    await initInteractive();
+  });
 
 program
   .command('auth')
