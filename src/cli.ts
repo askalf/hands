@@ -43,6 +43,7 @@ program
   .option('-b, --budget <amount>', 'Max budget in USD')
   .option('-t, --turns <count>', 'Max turns')
   .option('-v, --voice', 'Use voice input (microphone → whisper transcription)')
+  .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .action(async (prompt, opts) => {
     // Apply CLI overrides to config
     if (opts.model || opts.budget || opts.turns) {
@@ -53,7 +54,7 @@ program
       await saveConfig(overrides);
     }
 
-    await run(prompt, { voice: opts.voice });
+    await run(prompt, { voice: opts.voice, dryRun: opts.dryRun });
   });
 
 program

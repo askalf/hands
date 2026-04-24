@@ -6,10 +6,26 @@ import * as output from './util/output.js';
 
 export interface RunOptions {
   voice?: boolean;
+  /** When set, SDK mode's tool calls are logged + stubbed — nothing fires on the host. Not supported in Claude Login mode; forces a fallback. */
+  dryRun?: boolean;
 }
 
 export async function run(prompt: string, options: RunOptions = {}): Promise<void> {
   const config = await loadConfig();
+
+  // --dry-run only works in SDK mode. In Claude Login (oauth) mode, `claude`
+  // spawns as a child process and dispatches tools itself, so hands can't
+  // intercept. Force API-key mode for this invocation so dry-run actually
+  // holds; fail loudly if no API key.
+  if (options.dryRun && config.authMode === 'oauth') {
+    if (!config.apiKey) {
+      output.error('--dry-run only works in SDK mode (API key), and no API key is configured.');
+      output.info('Run `hands auth` to add an API key, or drop --dry-run to use Claude Login mode.');
+      process.exit(1);
+    }
+    output.warn('--dry-run only works in SDK mode. Forcing SDK mode for this invocation.');
+    config.authMode = 'api_key';
+  }
 
   // Auto-detect auth mode
   if (config.authMode === 'oauth') {
@@ -36,7 +52,7 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
       // CLI mode handles its own interactive loop and output
       await runCliMode(prompt, config, { voice: options.voice });
     } else {
-      const result = await runSdkMode(prompt, config);
+      const result = await runSdkMode(prompt, config, { dryRun: options.dryRun });
       if (result.text) {
         output.header('Result');
         console.log(result.text);

@@ -144,6 +144,31 @@ hands voice-setup --model tiny   # smaller/faster (~75MB)
 hands voice-setup --model small  # more accurate (~466MB)
 ```
 
+### `hands run "<prompt>" --dry-run`
+
+Run the agent without actually doing anything on the host. In SDK mode, every tool call (shell, keyboard, mouse, screenshot) is **logged and stubbed** — the agent sees success results so the loop continues, but no command executes, no key presses, no cursor moves. The audit log at `~/.hands/audit.jsonl` shows what it would have done.
+
+```bash
+hands run "organize my downloads folder" --dry-run
+# → agent plans + the audit log shows every action it would have taken
+cat ~/.hands/audit.jsonl | tail -20
+```
+
+Useful for reviewing an agent's plan before trusting it with a new task, or smoke-testing a prompt change without side effects. Not supported in Claude Login mode (the `claude` child process dispatches tools itself; hands can't intercept them) — `--dry-run` forces SDK mode for that invocation.
+
+### Audit log
+
+Every tool invocation in SDK mode is appended to `~/.hands/audit.jsonl` with timestamp, tool name, action, summarized args (image bytes stripped, long strings truncated), duration, and outcome. The file rotates to `audit.jsonl.old` when it exceeds 10 MB. Paste the tail into issues when reporting bugs.
+
+```bash
+tail -3 ~/.hands/audit.jsonl
+# {"ts":1761307432021,"tool":"computer","action":"screenshot","args":{},"durationMs":45,"ok":true}
+# {"ts":1761307432190,"tool":"bash","args":{"command":"Get-Process"},"durationMs":112,"ok":true}
+# {"ts":1761307432340,"tool":"computer","action":"left_click","args":{"coordinate":[640,400]},"durationMs":22,"ok":true}
+```
+
+Claude Login mode delegates tool execution to the `claude` child process, which doesn't surface individual tool calls back to hands — actions there are not logged. Use SDK mode (`hands auth` → API Key, or `--dry-run` which forces SDK) if you need a full local audit trail.
+
 ### `hands doctor`
 
 Aggregated health report covering every subsystem hands depends on: Node version, platform, config dir state + permissions, screenshot / mouse / keyboard tool availability, Claude CLI install + version, whisper.cpp install, and — if `ANTHROPIC_BASE_URL` is set — a reachability probe for dario. Exit code 1 on any fail, 0 otherwise. Paste it into issues.
