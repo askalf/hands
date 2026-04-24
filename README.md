@@ -144,9 +144,20 @@ hands voice-setup --model tiny   # smaller/faster (~75MB)
 hands voice-setup --model small  # more accurate (~466MB)
 ```
 
+### `hands doctor`
+
+Aggregated health report covering every subsystem hands depends on: Node version, platform, config dir state + permissions, screenshot / mouse / keyboard tool availability, Claude CLI install + version, whisper.cpp install, and — if `ANTHROPIC_BASE_URL` is set — a reachability probe for dario. Exit code 1 on any fail, 0 otherwise. Paste it into issues.
+
+```bash
+hands doctor                  # text table, non-destructive (no browser opens, no config writes)
+hands doctor --json           # structured output for scripts
+hands doctor --skip-dario     # skip the dario HTTP probe
+hands doctor --skip-whisper   # skip the whisper-install check (useful in CI)
+```
+
 ### `hands check`
 
-Verify platform dependencies are installed (including voice/whisper status).
+Older narrower version of `doctor` — platform deps only. Kept for backwards compat; `doctor` covers everything `check` does plus auth + config + dario routing state.
 
 ### `hands config`
 

@@ -6,6 +6,7 @@ import { run } from './run.js';
 import { checkPlatform } from './platform/index.js';
 import { loadConfig, saveConfig } from './util/config.js';
 import { isWhisperInstalled, setupWhisper } from './voice/index.js';
+import { runDoctor, renderDoctorText, renderDoctorJson, exitCodeFor } from './doctor.js';
 import * as output from './util/output.js';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -96,6 +97,21 @@ program
     console.log(chalk.dim('Budget:'), `$${config.maxBudgetUsd.toFixed(2)}`);
     console.log(chalk.dim('Max turns:'), config.maxTurns);
     console.log(chalk.dim('Guardrails:'), chalk.green('active'));
+  });
+
+program
+  .command('doctor')
+  .description('Aggregated health report — env, config, platform tools, Claude CLI, voice, dario routing. Paste into issues.')
+  .option('--json', 'Emit structured JSON instead of the text table')
+  .option('--skip-dario', 'Skip the dario reachability probe even if ANTHROPIC_BASE_URL is set')
+  .option('--skip-whisper', 'Skip the whisper-install check (useful in CI without the binary)')
+  .action(async (opts) => {
+    const report = await runDoctor({
+      skipDario: !!opts.skipDario,
+      skipWhisper: !!opts.skipWhisper,
+    });
+    process.stdout.write(opts.json ? renderDoctorJson(report) + '\n' : renderDoctorText(report));
+    process.exit(exitCodeFor(report));
   });
 
 program
