@@ -93,6 +93,21 @@ hands auth
 
 > **Note:** SDK mode uses computer-use API calls which cost per token. A simple task like "open notepad" can cost several dollars. Claude Login mode is strongly recommended.
 
+### Routing through dario (zero per-token cost in SDK mode)
+
+If you're running [dario](https://github.com/askalf/dario) locally, hands will auto-route SDK-mode calls through it — including SDK mode's computer-use calls, which can then bill against your Claude Max subscription instead of per-token API overage. The `@anthropic-ai/sdk` client defaults its `baseURL` and `apiKey` to the standard env vars, so this works with zero hands-side config:
+
+```bash
+# in whatever shell starts hands:
+export ANTHROPIC_BASE_URL=http://localhost:3456
+export ANTHROPIC_API_KEY=dario            # or your DARIO_API_KEY if you set one
+
+dario proxy                                # keep this running
+hands run "open notepad"
+```
+
+Verify the routing is live with `hands check` (reports the effective base URL) or by watching `dario proxy -v` while hands is running — a request should show up in dario's log. Claude Login mode (the default) spawns the `claude` CLI child process directly, so the env-var-routing flow only matters for SDK mode.
+
 ## Commands
 
 ### `hands run "<prompt>"`
