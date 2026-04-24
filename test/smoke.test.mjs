@@ -54,3 +54,8 @@ test('platform/keyboard exposes type + key', async () => {
   assert.equal(typeof mod.keyboardType, 'function', 'keyboardType missing');
   assert.equal(typeof mod.keyboardKey,  'function', 'keyboardKey missing');
 });
+
+test('init exposes initInteractive', async () => {
+  const mod = await import('../dist/init.js');
+  assert.equal(typeof mod.initInteractive, 'function', 'initInteractive missing');
+});

@@ -11,6 +11,20 @@ checklist.
 
 ## [Unreleased]
 
+### Added — `hands init` (interactive first-run wizard)
+
+One command to walk a new user through every choice hands asks them to make before their first `hands run`. Environment snapshot at the top (Claude CLI install state, whisper install state, `ANTHROPIC_BASE_URL` routing hint) so it's obvious what will be skipped, then delegates step-by-step to the existing flows — no duplicated logic.
+
+- If `claude` CLI is missing, offers the one-liner install (`npm i -g @anthropic-ai/claude-code`) and bails cleanly so the user can re-run after install. Continuing without it warns that only API Key mode will be available.
+- Calls the existing `authInteractive()` for Claude Login vs API Key selection (same flow `hands auth` uses).
+- Offers whisper.cpp setup if not already installed. Non-destructive skip if it's there.
+- If auth mode lands on API Key and `ANTHROPIC_BASE_URL` isn't set, surfaces a dario routing tip. Instructions only — we don't write env vars for the user (shells are too varied).
+- Final summary prints auth / model / budget / turns / voice state plus a try-it one-liner.
+
+Safe to re-run — every step asks before changing anything, and defaults reflect current config. ASCII status markers (`[ok]`/`[miss]`) instead of Unicode to avoid codepage fights in Windows terminals.
+
+One new smoke-test assertion (init exports `initInteractive`). 36 total (up from 35).
+
 ### Added — audit log + `--dry-run`
 
 Trust-story enhancements for a tool that takes shell, keyboard, mouse, and screenshot access on the user's behalf. Both are SDK-mode features — Claude Login mode spawns the `claude` child process and dispatches tools internally, so hands can't intercept actions there.
