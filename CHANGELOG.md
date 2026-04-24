@@ -11,6 +11,37 @@ checklist.
 
 ## [Unreleased]
 
+### Release — publish-ready for npm + public-flip
+
+Closes the prep pass for flipping hands public and shipping `@askalf/hands@0.1.0`:
+
+- **`package.json`** — removed `"private": true`. Added `files` allowlist (`dist`, `README.md`, `LICENSE`, `CHANGELOG.md`) so the tarball ships only what users need — 55 kB, 76 files, verified via `npm publish --dry-run`. Added `prepublishOnly` script running `npm run build && npm test` so a local `npm publish` can't ship a stale dist or a failing build.
+- **`.github/workflows/codeql.yml`** — restored from pre-deletion state (commit `17df9f3^`). Content is byte-identical to the sibling repos' canonical version. Will start running once the repo flips public (CodeQL is free on public repos; was unavailable on the private account without GHAS, which is why it was removed).
+
+After merge, the public-flip sequence (all one-liners, can be done in any order):
+
+```bash
+# Flip public
+gh repo edit askalf/hands --visibility public
+
+# Enable secret scanning + push protection (free on public)
+echo '{"security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}' | \
+  gh api --method PATCH repos/askalf/hands --input -
+
+# Enable Dependabot security updates (free on public)
+gh api --method PUT repos/askalf/hands/vulnerability-alerts
+gh api --method PUT repos/askalf/hands/automated-security-fixes
+
+# Add NPM_TOKEN (same one used for dario / deepdive / claude-bridge)
+gh secret set NPM_TOKEN --repo askalf/hands < <(printf '%s' "$NPM_TOKEN")
+
+# Optional: branch protection with required checks (after CodeQL has run once)
+# (same pattern as deepdive — see its settings)
+
+# Cut v0.1.0 — auto-release.yml will fire and npm publish end-to-end
+gh release create v0.1.0 --repo askalf/hands --title "v0.1.0" --generate-notes
+```
+
 ### Tests — smoke + guardrails coverage
 
 First real test coverage. Was previously zero tests. Two files, 18 passing assertions, runs in ~330ms via `node --test`:
