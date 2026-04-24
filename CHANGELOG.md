@@ -11,6 +11,23 @@ checklist.
 
 ## [Unreleased]
 
+### Added — `hands doctor`
+
+Aggregated health report mirroring the pattern from dario / deepdive / claude-bridge. One command probes every subsystem hands depends on and produces a paste-able table:
+
+- **env** — hands version, Node version (fail below 20), platform + arch + OS release.
+- **config** — `~/.hands/` dir state + perms (warn if not 0700 on non-Windows), auth mode, model, budget, and a fail if `api_key` mode is set but no key stored.
+- **platform** — display server, and availability of screenshot / mouse / keyboard tool for the detected platform (PowerShell on Windows, cliclick on macOS, xdotool+scrot on X11 Linux, ydotool+grim on Wayland). Surfaces the platform-specific install hint if anything's missing.
+- **claude-cli** — `claude` on PATH + version (warn if absent, since Claude Login mode needs it).
+- **voice** — whisper.cpp install state for `--voice` mode.
+- **dario** — if `ANTHROPIC_BASE_URL` is set, probe `/health` with a 3s timeout and surface the verdict. Skipped (info-only) when the env var isn't set.
+
+Flags: `--json` for structured output (scrapeable in CI, usable by claude-bridge's `/status`), `--skip-dario` / `--skip-whisper` for environments where those checks aren't meaningful. Exit code 1 on any fail, 0 otherwise.
+
+Pure helpers (`nodeMeetsMinimum`, `scrubPath`, `trimTrailingSlash`, `classifyFsError`, `classifyFetchError`, `renderDoctorText`, `renderDoctorJson`, `exitCodeFor`) all exported for library use. 10 new test assertions in `test/doctor.test.mjs` covering version matching, path scrubbing, URL trimming, error classification, text/JSON rendering, and exit-code logic. 28 total (up from 18).
+
+`hands check` remains for backwards compat — it's a narrower subset of what `doctor` covers.
+
 ### Release — publish-ready for npm + public-flip
 
 Closes the prep pass for flipping hands public and shipping `@askalf/hands@0.1.0`:
