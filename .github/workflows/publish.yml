@@ -1,0 +1,42 @@
+name: Publish to npm
+
+# Fires when a GitHub Release is published — the manual-release path for
+# cases where `auto-release.yml`'s PR-merge trigger isn't the right
+# shape (e.g. first release of a repo where `package.json` started at
+# the target version, or bumping an off-master branch). A release
+# created by the maintainer's own `gh release create` DOES fire this
+# (human-token release events fire downstream workflows; GITHUB_TOKEN-
+# created releases don't — that's why auto-release.yml publishes inline).
+#
+# The release tag should match `package.json` version — the workflow
+# doesn't enforce that, but a mismatched tag/version will either
+# succeed confusingly (if the package.json number isn't on npm) or
+# fail (if it is). Keep them aligned at release-prep time.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  # id-token: write required for `npm publish --provenance` SLSA
+  # attestation. Without this, publish either fails or skips provenance.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: node dist/cli.js --help
+      - run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
