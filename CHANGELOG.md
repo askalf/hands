@@ -11,6 +11,16 @@ checklist.
 
 ## [Unreleased]
 
+### Added — audit log + `--dry-run`
+
+Trust-story enhancements for a tool that takes shell, keyboard, mouse, and screenshot access on the user's behalf. Both are SDK-mode features — Claude Login mode spawns the `claude` child process and dispatches tools internally, so hands can't intercept actions there.
+
+**Audit log** — every tool invocation in SDK mode appends one JSONL line to `~/.hands/audit.jsonl`: timestamp, tool name, action, summarized args (image bytes stripped, long strings truncated to 200 chars), wall-clock duration, and outcome (ok/error/dry-run). Non-fatal on failure — if the log-write errors out (disk full, permission flipped), hands logs to stderr and keeps going; the audit log is diagnostic, not authoritative. The live file rotates to `audit.jsonl.old` when it exceeds 10 MB; two files total, bounded disk cost.
+
+**`hands run --dry-run`** — the agent plans and emits tool calls, but every execution is stubbed out. Shell commands don't run, keys don't press, mouse doesn't move, screenshots return a text placeholder. The agent sees "success" for each stubbed action so the loop continues to completion. Audit-logged with `dryRun: true` so a review shows both what the agent wanted to do and the fact that it didn't. Not supported in Claude Login mode (forces SDK fallback for the invocation, with a clear warning).
+
+**New exports for library callers:** `appendAudit`, `rotateIfNeeded`, `readAuditHistory`, `summarizeForAudit`, `getAuditPaths` from `util/audit.js`, plus `summarizeToolArgs` from `sdk-mode.js`. 7 new test assertions covering: append+read round-trip, dir-creation on first append, summarization correctness (image bytes dropped, string truncation), rotation behaviour (rotates over cap, returns absent when no file exists, fresh appends after rotation don't read the archive), and malformed-line tolerance in history reads. 35 tests total (up from 28).
+
 ### Added — `hands doctor`
 
 Aggregated health report mirroring the pattern from dario / deepdive / claude-bridge. One command probes every subsystem hands depends on and produces a paste-able table:

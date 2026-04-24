@@ -6,6 +6,7 @@ import { keyboardType, keyboardKey } from './platform/keyboard.js';
 import * as output from './util/output.js';
 import type { AgentConfig } from './util/config.js';
 import { checkCommand, GUARDRAIL_PROMPT } from './util/guardrails.js';
+import { appendAudit } from './util/audit.js';
 
 interface RunResult {
   text: string;
@@ -65,7 +66,12 @@ const SYSTEM_PROMPT = `You are a computer control agent. CRITICAL: Use the bash 
 - Do NOT retry the same failed command — try something different.
 ${GUARDRAIL_PROMPT}`;
 
-export async function runSdkMode(prompt: string, config: AgentConfig): Promise<RunResult> {
+export interface SdkModeOptions {
+  /** When true, every tool call is logged to audit + stubbed — no shell, mouse, keyboard, or screenshot actually fires. Agent still sees "success" results so the loop continues. */
+  dryRun?: boolean | undefined;
+}
+
+export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkModeOptions = {}): Promise<RunResult> {
   const client = new Anthropic({ apiKey: config.apiKey });
   const { width: realWidth, height: realHeight } = await getScreenSize();
   const model = config.model;
@@ -156,7 +162,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig): Promise<R
         hasToolUse = true;
         let result: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
         try {
-          result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor);
+          result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun });
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           output.warn(`Action failed: ${errMsg}`);
@@ -197,7 +203,101 @@ export async function runSdkMode(prompt: string, config: AgentConfig): Promise<R
   return { text: finalText, inputTokens: totalInput, outputTokens: totalOutput, costUsd, turns };
 }
 
+/**
+ * Audit + dry-run wrapper around the real tool dispatcher. Every call
+ * (real or dry-run) is appended to `~/.hands/audit.jsonl` with timing
+ * and outcome. When `opts.dryRun` is set, no shell / mouse / keyboard
+ * / screenshot actually fires — the agent sees a success stub so the
+ * loop continues, but the log shows the call was suppressed.
+ */
 async function executeComputerAction(
+  toolName: string,
+  input: Record<string, unknown>,
+  scaleFactor: number,
+  opts: { dryRun?: boolean | undefined } = {},
+): Promise<Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>> {
+  const action = input['action'] as string | undefined;
+  const auditArgs = summarizeToolArgs(toolName, input);
+  const start = Date.now();
+
+  if (opts.dryRun) {
+    const stub = dryRunStub(toolName, action, input);
+    output.action(toolName, `[dry-run] ${action ?? describeCall(toolName, input)}`);
+    await appendAudit({ tool: toolName, action, args: auditArgs, durationMs: 0, ok: true, dryRun: true });
+    return [{ type: 'text', text: stub }];
+  }
+
+  try {
+    const result = await executeComputerActionInner(toolName, input, scaleFactor);
+    await appendAudit({ tool: toolName, action, args: auditArgs, durationMs: Date.now() - start, ok: true });
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await appendAudit({ tool: toolName, action, args: auditArgs, durationMs: Date.now() - start, ok: false, error: msg.slice(0, 200) });
+    throw err;
+  }
+}
+
+/** What a tool call would do, rendered as a short human string. */
+function dryRunStub(toolName: string, action: string | undefined, input: Record<string, unknown>): string {
+  if (toolName === 'computer' && action) {
+    switch (action) {
+      case 'screenshot': return '[dry-run] would take screenshot';
+      case 'left_click':
+      case 'right_click':
+      case 'double_click': {
+        const coord = input['coordinate'] as [number, number] | undefined;
+        return `[dry-run] would ${action.replace('_', ' ')} at (${coord?.[0] ?? '?'}, ${coord?.[1] ?? '?'})`;
+      }
+      case 'mouse_move': {
+        const coord = input['coordinate'] as [number, number] | undefined;
+        return `[dry-run] would move mouse to (${coord?.[0] ?? '?'}, ${coord?.[1] ?? '?'})`;
+      }
+      case 'type': {
+        const text = (input['text'] as string | undefined) ?? '';
+        return `[dry-run] would type: ${text.length > 60 ? text.slice(0, 60) + '...' : text}`;
+      }
+      case 'key':
+        return `[dry-run] would press key: ${input['text']}`;
+      case 'scroll': {
+        const coord = input['coordinate'] as [number, number] | undefined;
+        return `[dry-run] would scroll at (${coord?.[0] ?? '?'}, ${coord?.[1] ?? '?'})`;
+      }
+      default:
+        return `[dry-run] would invoke computer action: ${action}`;
+    }
+  }
+  if (toolName === 'bash') {
+    const cmd = (input['command'] as string | undefined) ?? '';
+    return `[dry-run] would execute: ${cmd.length > 120 ? cmd.slice(0, 120) + '...' : cmd}`;
+  }
+  return `[dry-run] would invoke ${toolName}`;
+}
+
+/** Short, lossy-ok summary of tool args for the audit log. Strips image bytes, truncates long strings. */
+export function summarizeToolArgs(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (k === 'image' || k === 'data' || k === 'source') continue;  // never log base64 image bytes
+    if (typeof v === 'string') {
+      out[k] = v.length > 200 ? v.slice(0, 200) + '…' : v;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** Describe a non-computer tool call when `action` isn't present. */
+function describeCall(toolName: string, input: Record<string, unknown>): string {
+  if (toolName === 'bash') {
+    const cmd = input['command'] as string | undefined;
+    return cmd ? cmd.slice(0, 60) : 'bash';
+  }
+  return toolName;
+}
+
+async function executeComputerActionInner(
   toolName: string,
   input: Record<string, unknown>,
   scaleFactor: number,
