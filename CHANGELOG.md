@@ -11,6 +11,12 @@ checklist.
 
 ## [Unreleased]
 
+### CI — disable CodeQL workflow while repo is private
+
+GitHub code scanning (CodeQL) is not available on personal-account private repos without GitHub Advanced Security (paid, per-seat). The `codeql.yml` workflow was part of the CI foundation parity bundle; when run, every PR's `analyze` job fails with: *"Code scanning is not enabled for this repository. Please enable code scanning in the repository settings."* That made every Dependabot PR's check surface look red without any dep actually being a problem.
+
+Removing the workflow file until the repo flips public. When it does, restore from git history (pre-this-commit copy is bit-identical to the dario / deepdive / claude-bridge versions — canonical template). Branch protection doesn't depend on `analyze` on hands yet, so removal doesn't un-gate anything.
+
 ### CI — foundation parity with dario / claude-bridge / deepdive
 
 Standard CI / security / release scaffolding, ported pattern-for-pattern from the sibling repos:
