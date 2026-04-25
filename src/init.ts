@@ -90,7 +90,14 @@ export async function initInteractive(): Promise<void> {
   // Final summary.
   console.log();
   output.header('Ready');
-  output.success(`auth: ${config.authMode}${config.authMode === 'api_key' && config.apiKey ? ' (key stored)' : ''}`);
+  // Boolean intermediate so CodeQL's js/clear-text-logging flow can
+  // see that we only consume the truthy-ness of apiKey, never its
+  // value. The template literal's true-branch is the fixed string
+  // ' (key stored)' — the key itself is never emitted — but CodeQL's
+  // dataflow conservatively flags any access on the path to a logger,
+  // and routing through Boolean(...) is the standard break.
+  const keyStored = config.authMode === 'api_key' && Boolean(config.apiKey);
+  output.success(`auth: ${config.authMode}${keyStored ? ' (key stored)' : ''}`);
   output.success(`model: ${config.model}`);
   output.success(`budget: $${config.maxBudgetUsd.toFixed(2)} / ${config.maxTurns} turns`);
   output.success(`voice: ${(await isWhisperInstalled()) ? 'ready' : 'not installed'}`);

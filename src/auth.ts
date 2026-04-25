@@ -86,9 +86,13 @@ export async function showAuthStatus(): Promise<void> {
   output.header('Authentication Status');
 
   if (config.authMode === 'api_key') {
+    // Don't emit any substring of a stored key — not even the
+    // well-known `sk-ant-` prefix + last 4 chars. CodeQL's
+    // js/clear-text-logging flagged the substring leak; matches
+    // dario v3.7.2+'s "*** only" treatment of stored credentials in
+    // user-facing output.
     if (config.apiKey) {
-      const masked = config.apiKey.slice(0, 7) + '...' + config.apiKey.slice(-4);
-      output.success(`Mode: API Key (${masked})`);
+      output.success('Mode: API Key (***)');
     } else {
       output.warn('Mode: API Key — but no key configured');
     }
