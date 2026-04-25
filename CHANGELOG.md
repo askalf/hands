@@ -11,6 +11,10 @@ checklist.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-25
+
+Three new commands shipped between v0.1.0 and v0.2.0 — `hands init` (interactive first-run setup), `audit log + --dry-run` (trust-story for the SDK-mode tool dispatch path), and `hands doctor` (aggregated health report). All three are additive; no behavior change for existing v0.1.0 users.
+
 ### Added — `hands init` (interactive first-run wizard)
 
 One command to walk a new user through every choice hands asks them to make before their first `hands run`. Environment snapshot at the top (Claude CLI install state, whisper install state, `ANTHROPIC_BASE_URL` routing hint) so it's obvious what will be skipped, then delegates step-by-step to the existing flows — no duplicated logic.
