@@ -1,7 +1,7 @@
 {
   "name": "@askalf/hands",
   "version": "0.2.0",
-  "description": "Computer-use agent. Your LLM on your mouse, keyboard, and screen. PowerShell-first, voice optional, safety guardrails. Routes through dario or any Anthropic-compat endpoint.",
+  "description": "Cross-platform computer-use agent. Your LLM on your mouse, keyboard, and screen. Windows (PowerShell), macOS (open + osascript), Linux (xdotool / ydotool). Voice optional, safety guardrails. Routes through dario or any Anthropic-compat endpoint.",
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
   "type": "module",
@@ -64,7 +64,10 @@
     "anthropic",
     "automation",
     "voice-control",
-    "powershell",
+    "cross-platform",
+    "windows",
+    "macos",
+    "linux",
     "dario",
     "local"
   ]

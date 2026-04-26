@@ -5,8 +5,9 @@ import { mouseClick, mouseMove, mouseDoubleClick, mouseScroll } from './platform
 import { keyboardType, keyboardKey } from './platform/keyboard.js';
 import * as output from './util/output.js';
 import type { AgentConfig } from './util/config.js';
-import { checkCommand, GUARDRAIL_PROMPT } from './util/guardrails.js';
+import { checkCommand } from './util/guardrails.js';
 import { appendAudit } from './util/audit.js';
+import { buildSdkSystemPrompt, normalizePlatform } from './system-prompt.js';
 
 interface RunResult {
   text: string;
@@ -26,46 +27,6 @@ const PRICING: Record<string, { input: number; output: number }> = {
 // Screenshot resize target (must match screenshot.ts resize logic)
 const SCREENSHOT_MAX_WIDTH = 1280;
 
-const SYSTEM_PROMPT = `You are a computer control agent. CRITICAL: Use the bash tool with PowerShell commands instead of screenshot-click loops whenever possible.
-
-## Self-Correction
-1. If a command fails, DO NOT retry it. Analyze the error and try a DIFFERENT approach.
-2. NEVER repeat a failed approach more than once.
-3. If a task takes more than 3 turns, STOP and reconsider — you're overcomplicating it.
-4. Check if programs exist first: powershell -Command "Get-Command 'program' -ErrorAction SilentlyContinue"
-
-## Rules
-1. Prefer bash tool (PowerShell) over computer tool for ALL tasks that can be done via command line.
-2. Only use the computer tool (screenshot/click) when the task genuinely requires visual interaction.
-3. Minimize screenshot frequency — don't screenshot after every action. Trust command output and exit codes.
-4. Combine multiple steps into single PowerShell commands to reduce turns and cost.
-
-## Windows Gotchas
-- ALWAYS wrap Windows commands in: powershell -Command "..."
-- NEVER use bare app names for Windows built-ins (notepad, paint, calc) — triggers Store redirect dialog
-- CORRECT: powershell -Command "Start-Process 'C:\\Windows\\System32\\notepad.exe'"
-- WRONG: powershell -Command "Start-Process notepad" — opens Store dialog, app never launches
-- For typing into apps: powershell -Command "Start-Process 'C:\\Windows\\System32\\notepad.exe'; Start-Sleep -Seconds 2; Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('text')"
-- Start-Process is async — MUST sleep 2 seconds before interacting with the opened window
-- Use semicolons to chain PowerShell, not && (bash syntax)
-- If a command "succeeded" but nothing happened, app is stuck at a Store/UAC dialog — use full .exe path
-
-## PowerShell patterns
-- Open apps: powershell -Command "Start-Process chrome 'https://url.com'" or "Start-Process 'C:\\Windows\\System32\\notepad.exe'"
-- File ops: powershell -Command "Get-Content 'file.txt'" / "Set-Content 'file.txt' 'content'"
-- Window management: powershell -Command "(New-Object -ComObject Shell.Application).MinimizeAll()"
-- Clipboard: powershell -Command "Set-Clipboard 'text'"
-- Install software: powershell -Command "winget install --id 'App.Name' --accept-package-agreements"
-- Git/npm/docker: run directly in bash (these work fine without powershell wrapper)
-
-## Anti-patterns
-- Do NOT screenshot to verify a window opened. Just open it.
-- Do NOT click through UI menus when a PowerShell command exists.
-- Do NOT take screenshots after every single action.
-- Do NOT use multiple turns for simple one-command tasks.
-- Do NOT retry the same failed command — try something different.
-${GUARDRAIL_PROMPT}`;
-
 export interface SdkModeOptions {
   /** When true, every tool call is logged to audit + stubbed — no shell, mouse, keyboard, or screenshot actually fires. Agent still sees "success" results so the loop continues. */
   dryRun?: boolean | undefined;
@@ -75,6 +36,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
   const client = new Anthropic({ apiKey: config.apiKey });
   const { width: realWidth, height: realHeight } = await getScreenSize();
   const model = config.model;
+  const systemPrompt = buildSdkSystemPrompt(normalizePlatform(process.platform));
 
   // Calculate the display dimensions we tell Claude (matches screenshot size)
   const scaleFactor = Math.min(1.0, SCREENSHOT_MAX_WIDTH / realWidth);
@@ -143,7 +105,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
       max_tokens: 4096,
       tools,
       messages,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       betas: ['computer-use-2025-11-24'],
     });
 

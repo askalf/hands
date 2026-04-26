@@ -2,7 +2,7 @@
 
 **Your LLM on your mouse, keyboard, and screen.**
 
-One npm install. Hands-on computer control — PowerShell-first for speed, screenshot tool for visual verification when needed, voice input optional. Routes through [dario](https://github.com/askalf/dario) or any Anthropic-compat endpoint — keep using your Claude Max subscription and pay zero per-token on the happy path.
+One npm install. Hands-on computer control — OS-native shell first for speed (PowerShell on Windows, `open` + AppleScript on macOS, `xdotool` / `ydotool` on Linux), screenshot tool for visual verification when needed, voice input optional. Routes through [dario](https://github.com/askalf/dario) or any Anthropic-compat endpoint — keep using your Claude Max subscription and pay zero per-token on the happy path.
 
 > **Status:** seeded from `@askalf/hands`'s v0.3.7 tree (commit `bef177d`), the last standalone computer-use state before that repo pivoted to a fleet-bridge role. This repo is the continuation of that work — pre-1.0, modernization in progress.
 
@@ -61,7 +61,13 @@ Heard: "minimize everything and open spotify"
 ℹ Session ended.
 ```
 
-**PowerShell-first** — Claude runs PowerShell commands directly to open apps, browse the web, manage files, and automate tasks. No slow screenshot loops. A screenshot MCP tool is available when Claude needs to visually verify what's on screen, but most tasks complete entirely through PowerShell.
+**Shell-first, OS-native** — Claude drives the OS through its native shell rather than slow screenshot-click loops. The system prompt branches on `process.platform` and ships matching guidance:
+
+- **Windows** — PowerShell (`Start-Process`, `Get-ChildItem`, `Set-Clipboard`, `winget`).
+- **macOS** — `open -a` for app launch, `osascript` for keystrokes / window control, `pbcopy` / `pbpaste` for clipboard, `brew` for installs.
+- **Linux** — `xdg-open` for files / URLs, `xdotool` (X11) or `ydotool` (Wayland) for keystrokes, `xclip` / `wl-copy` for clipboard, distro-appropriate package manager. Display server (X11 vs Wayland) is detected at the start of each run.
+
+A screenshot MCP tool is available when Claude needs to visually verify what's on screen, but most tasks complete entirely through the shell. `hands doctor` reports which platform tools are installed on the current machine.
 
 **Voice control** — Add `--voice` to speak commands instead of typing. Uses local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for transcription — free, private, completely offline. No cloud APIs, no data leaves your machine.
 
@@ -248,7 +254,8 @@ hands run "open chrome" --voice
         │       ├── Spawns claude CLI
         │       ├── --append-system-prompt (computer control agent)
         │       ├── --mcp-config (screenshot tool)
-        │       ├── Claude uses built-in bash → PowerShell
+        │       ├── Claude uses built-in bash → OS-native shell
+        │       │       (PowerShell / open+osascript / xdotool|ydotool)
         │       └── Interactive loop: task → "What next?" → repeat
         │
         └── API Key (fallback)
@@ -258,7 +265,7 @@ hands run "open chrome" --voice
                 └── Single-run with cost summary
 ```
 
-The MCP server exposes a single `screenshot` tool. All other computer control happens through Claude's built-in bash tool running PowerShell commands — this is dramatically faster than screenshot-based control loops.
+The MCP server exposes a single `screenshot` tool. All other computer control happens through Claude's built-in bash tool running OS-native shell commands — PowerShell on Windows, `open` + `osascript` on macOS, `xdotool` / `ydotool` on Linux. The system prompt branches on `process.platform` and ships matching examples for the detected OS, which is dramatically faster than screenshot-based control loops.
 
 ## Configuration
 
