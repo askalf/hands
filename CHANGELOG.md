@@ -11,6 +11,14 @@ checklist.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-25
+
+Cross-platform system prompts (no longer Windows-only despite the platform abstraction), CodeQL clear-text-logging fix, and a production-ready README rewrite. Both functional changes are additive — v0.2.0 Windows users see no behavior change. macOS / Linux operation is now intended-to-work but **empirically un-smoked** — the system-prompt branching is unit-tested but the LLM behavior under it is not yet verified against real model use on a non-Windows host. First post-publish report from a Mac or Linux user is the signal that locks in the "cross-platform" claim.
+
+### Documentation — production-ready README rewrite
+
+The pre-v0.3 README was install + commands + a thin "Safety Guardrails" paragraph. v0.3.0 ships a structural rewrite covering the gaps a production-ready high-trust local computer-use tool needs: a "what you keep" sovereignty lead, an explicit cost-comparison table (Claude Login = $0, SDK + dario = $0, SDK direct = $X per task, hosted competitor = $20–50/mo flat), a full threat model with operating recommendations (review `--dry-run` before trusting a new task class, keep destructive ops scope-targeted, audit-log review cadence), an honest "Limitations & known issues" block (Wayland xdotool blind spot, macOS Accessibility first-run prompt, Claude-Login-no-audit-trail, cross-platform empirical state, SDK-mode-Anthropic-only), a troubleshooting / FAQ block, and a trust-and-transparency table mirroring claude-bridge's pattern (runtime deps count, network scope, telemetry status, branch protection, release attestation). Old content preserved where it was working — quickstart, commands reference, configuration, the Full Platform pitch, the Links + License footer.
+
 ### Changed — system prompts are now OS-aware (no longer Windows-only despite the platform abstraction)
 
 Pre-fix, both run modes hardcoded a Windows-only system prompt even though `src/platform/` had cliclick / xdotool / ydotool / scrot wired up for SDK-mode mouse / keyboard / screenshot. The LLM guidance was the missing piece — Claude was being told to run PowerShell on macOS / Linux where it doesn't exist:
