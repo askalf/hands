@@ -11,6 +11,23 @@ checklist.
 
 ## [Unreleased]
 
+### Changed — system prompts are now OS-aware (no longer Windows-only despite the platform abstraction)
+
+Pre-fix, both run modes hardcoded a Windows-only system prompt even though `src/platform/` had cliclick / xdotool / ydotool / scrot wired up for SDK-mode mouse / keyboard / screenshot. The LLM guidance was the missing piece — Claude was being told to run PowerShell on macOS / Linux where it doesn't exist:
+
+- `src/cli-mode.ts:201` opened with *"You are a computer control agent with FULL access to this Windows machine"* and had ~115 lines of PowerShell-only examples (Windows 11 Store redirect workarounds, `Start-Process 'C:\\Windows\\System32\\notepad.exe'`, etc.).
+- `src/sdk-mode.ts:29` opened with *"Use the bash tool with PowerShell commands instead of screenshot-click loops"* with similar Windows-only patterns.
+
+Both prompts now branch on `process.platform` and ship matching guidance:
+
+- **Windows (`win32`)** — PowerShell, `Start-Process`, `Get-ChildItem`, `Set-Clipboard`, `winget`, plus the Windows 11 Store redirect anti-pattern that was already documented.
+- **macOS (`darwin`)** — `open -a "AppName"` for app launch, `osascript -e 'tell application "System Events" to keystroke "..."'` for keyboard automation, `pbcopy` / `pbpaste` for clipboard, `brew` for installs. Notes the Accessibility-permission prompt on first `osascript` run.
+- **Linux (`linux`)** — `xdg-open` for files / URLs, `xdotool type` (X11) or `ydotool type` (Wayland) for keyboard automation, `xclip` (X11) or `wl-copy` (Wayland) for clipboard, with display-server detection (`[ -n "$WAYLAND_DISPLAY" ]`) baked in. Calls out that xdotool can't reach Wayland clients (input synthesis is blocked at the protocol level).
+
+**Implementation:** new pure module `src/system-prompt.ts` with `buildCliSystemPrompt(platform, sessionContext)` and `buildSdkSystemPrompt(platform)` builders, plus `normalizePlatform()` (falls back to `linux` for non-Win/non-Mac Unix variants — every BSD has bash + the standard utilities, so the Linux block is the safest default). `cli-mode.ts` and `sdk-mode.ts` are now ~120 lines lighter each — they call the builders instead of inlining the prompts. 13 new assertions in `test/system-prompt.test.mjs` cover the OS branching, the shared frame across platforms, the empty-sessionContext edge, and a regression pin against the original *"FULL access to this Windows machine"* on non-Win prompts. `npm test` total goes 36 → 49 (all green).
+
+**Marketing follow-through:** the `package.json` description swapped *"PowerShell-first"* for *"Cross-platform"* with a per-OS shell summary; keywords lost `powershell` and gained `windows` / `macos` / `linux` / `cross-platform`. The README's lead paragraph, "Shell-first" section (renamed from "PowerShell-first"), and architecture diagram all reflect the per-OS shell — the install table was already accurate (Windows / macOS / Linux X11 / Linux Wayland), it just had to stop being undermined by the lead copy. Historical v0.1.0 CHANGELOG entries left as-is — they describe what shipped at that time.
+
 ### Security — close CodeQL `js/clear-text-logging` alert (high)
 
 First CodeQL alert against the public repo. The flagged sink is `output.success()` in `src/util/output.ts:8`, with two upstream paths:
