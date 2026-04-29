@@ -53,6 +53,8 @@ program
   .option('-v, --voice', 'Use voice input (microphone → whisper transcription)')
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
+  .option('--persona <name>', 'Use a named persona (bundled: minimal, thorough, concise, security-aware) or ~/.hands/personas/<name>.md. SDK mode only.')
+  .option('--system-prompt <path>', 'Path to a system-prompt file. Bypasses --persona. SDK mode only.')
   .action(async (prompt, opts) => {
     // Apply CLI overrides to config
     if (opts.model || opts.budget || opts.turns) {
@@ -63,7 +65,13 @@ program
       await saveConfig(overrides);
     }
 
-    await run(prompt, { voice: opts.voice, dryRun: opts.dryRun, noDario: opts.dario === false });
+    await run(prompt, {
+      voice: opts.voice,
+      dryRun: opts.dryRun,
+      noDario: opts.dario === false,
+      ...(opts.persona ? { persona: opts.persona } : {}),
+      ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
+    });
   });
 
 program

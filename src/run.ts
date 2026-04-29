@@ -3,6 +3,7 @@ import { runSdkMode } from './sdk-mode.js';
 import { runCliMode } from './cli-mode.js';
 import { commandExists } from './platform/index.js';
 import { autoDetectDario } from './dario-detect.js';
+import { resolvePersona, resolveSystemPromptFile, type PersonaResolution } from './personas.js';
 import * as output from './util/output.js';
 
 export interface RunOptions {
@@ -11,6 +12,10 @@ export interface RunOptions {
   dryRun?: boolean;
   /** When true, skip the dario auto-detect probe at startup. Use when the operator wants explicit api.anthropic.com routing despite dario being available. */
   noDario?: boolean;
+  /** Named persona (bundled or ~/.hands/personas/<name>.md). Replaces the default OS-aware system prompt with the persona's text. SDK mode only. */
+  persona?: string;
+  /** Path to a system-prompt file. Bypasses persona lookup. SDK mode only. */
+  systemPrompt?: string;
 }
 
 export async function run(prompt: string, options: RunOptions = {}): Promise<void> {
@@ -21,6 +26,40 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
   const darioResult = await autoDetectDario({ disabled: !!options.noDario });
   if (darioResult.detected) {
     output.info(darioResult.detail);
+  }
+
+  // Resolve persona / explicit system-prompt-path BEFORE config and
+  // mode dispatch — surfaces "persona not found" errors with a clear
+  // message before we burn time on screenshot capture or auth probing.
+  // Mutex: --persona and --system-prompt are mutually exclusive;
+  // operator should pick one.
+  let personaResolution: PersonaResolution | undefined;
+  if (options.persona && options.systemPrompt) {
+    output.error('--persona and --system-prompt are mutually exclusive. Pick one.');
+    process.exit(1);
+  }
+  if (options.systemPrompt) {
+    try {
+      personaResolution = await resolveSystemPromptFile(options.systemPrompt);
+    } catch (err) {
+      output.error(`Could not read system-prompt file: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  } else if (options.persona) {
+    try {
+      personaResolution = await resolvePersona(options.persona);
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  }
+  if (personaResolution) {
+    const sourceLabel = personaResolution.source === 'bundled'
+      ? `bundled persona "${personaResolution.label}"`
+      : personaResolution.source === 'user-file'
+        ? `user persona "${personaResolution.label}" (~/.hands/personas/${personaResolution.label}.md)`
+        : `system prompt file ${personaResolution.label}`;
+    output.info(`using ${sourceLabel} (${personaResolution.prompt.length} chars)`);
   }
 
   const config = await loadConfig();
@@ -64,7 +103,10 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
       // CLI mode handles its own interactive loop and output
       await runCliMode(prompt, config, { voice: options.voice });
     } else {
-      const result = await runSdkMode(prompt, config, { dryRun: options.dryRun });
+      const result = await runSdkMode(prompt, config, {
+        dryRun: options.dryRun,
+        ...(personaResolution ? { systemPromptOverride: personaResolution.prompt } : {}),
+      });
       if (result.text) {
         output.header('Result');
         console.log(result.text);
