@@ -8,6 +8,7 @@ import type { AgentConfig } from './util/config.js';
 import { checkCommand } from './util/guardrails.js';
 import { appendAudit } from './util/audit.js';
 import { buildSdkSystemPrompt, normalizePlatform } from './system-prompt.js';
+import { readPage } from './tools/read-page.js';
 
 interface RunResult {
   text: string;
@@ -70,6 +71,24 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
       type: 'text_editor_20250728' as unknown as 'text_editor_20241022',
       name: 'str_replace_based_edit_tool',
     } as unknown as Anthropic.Beta.BetaTool,
+    // Custom tool — fetch a URL and return cleaned HTML for the agent
+    // to read directly. Faster, cheaper, and more reliable than
+    // navigating to the URL with the computer tool. See
+    // src/tools/read-page.ts.
+    {
+      name: 'read_page',
+      description: 'Fetch a web page and return its content for reading. Use this INSTEAD OF the computer tool whenever you need to read content from a URL — it\'s much faster (no browser cold-start), cheaper (no screenshot tokens), and more reliable (no JavaScript needed for static content). Returns the cleaned HTML body with all links resolved to absolute URLs, plus extracted page metadata. For pure single-page-application URLs (empty HTML body, content fetched via JS), returns metadata only with a marker — those need the computer tool. Always prefer this tool for: reading articles, browsing documentation, checking GitHub READMEs, viewing news pages, fetching JSON APIs, reading RSS feeds. Only use the computer tool for URLs when you specifically need to interact (click, fill forms, scroll a JS-rendered page).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The URL to fetch. Must be http: or https:.',
+          },
+        },
+        required: ['url'],
+      },
+    } as unknown as Anthropic.Beta.BetaTool,
   ];
 
   const messages: Anthropic.Beta.BetaMessageParam[] = [
@@ -126,7 +145,11 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
         hasToolUse = true;
         let result: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
         try {
-          result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun });
+          if (block.name === 'read_page') {
+            result = await executeReadPage(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
+          } else {
+            result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun });
+          }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           output.warn(`Action failed: ${errMsg}`);
@@ -258,7 +281,70 @@ function describeCall(toolName: string, input: Record<string, unknown>): string 
     const cmd = input['command'] as string | undefined;
     return cmd ? cmd.slice(0, 60) : 'bash';
   }
+  if (toolName === 'read_page') {
+    const url = input['url'] as string | undefined;
+    return url ? url.slice(0, 80) : 'read_page';
+  }
   return toolName;
+}
+
+/**
+ * Dispatcher for the `read_page` custom tool. Same audit + dry-run
+ * shape as `executeComputerAction`, but the underlying call is
+ * `readPage` from `tools/read-page.ts`.
+ *
+ * Dry-run for read_page is a no-op fetch-skip — we return a stub
+ * acknowledging the call but don't actually hit the network. The
+ * agent sees a "would have fetched X" message so its loop continues.
+ * (Network fetch is not destructive, but consistency with bash /
+ * computer dry-run semantics matters more than allowing read-only
+ * fetches through dry-run.)
+ */
+async function executeReadPage(
+  input: Record<string, unknown>,
+  opts: { dryRun?: boolean | undefined } = {},
+): Promise<Array<{ type: string; text?: string }>> {
+  const url = input['url'] as string | undefined;
+  if (!url || typeof url !== 'string') {
+    await appendAudit({ tool: 'read_page', args: { url }, durationMs: 0, ok: false, error: 'missing url' });
+    return [{ type: 'text', text: 'Error: read_page requires a `url` string argument.' }];
+  }
+
+  const auditArgs = { url };
+
+  if (opts.dryRun) {
+    output.action('read_page', `[dry-run] ${url}`);
+    await appendAudit({ tool: 'read_page', args: auditArgs, durationMs: 0, ok: true, dryRun: true });
+    return [{ type: 'text', text: `[dry-run] Would fetch ${url}. Returning stub. To actually read pages, run hands without --dry-run.` }];
+  }
+
+  output.action('read_page', url);
+  const start = Date.now();
+  try {
+    const result = await readPage(url);
+    const durationMs = Date.now() - start;
+    await appendAudit({
+      tool: 'read_page',
+      args: auditArgs,
+      durationMs,
+      ok: true,
+      // Stash a short shape signal in `error` field is wrong — but we
+      // don't have a separate metadata field on AuditEntry. Skip; the
+      // tool result itself is the canonical record of what the agent
+      // saw.
+    });
+    return [{ type: 'text', text: result.text }];
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await appendAudit({
+      tool: 'read_page',
+      args: auditArgs,
+      durationMs: Date.now() - start,
+      ok: false,
+      error: msg.slice(0, 200),
+    });
+    return [{ type: 'text', text: `Error fetching ${url}: ${msg}` }];
+  }
 }
 
 async function executeComputerActionInner(
