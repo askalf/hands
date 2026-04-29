@@ -2,15 +2,27 @@ import { loadConfig } from './util/config.js';
 import { runSdkMode } from './sdk-mode.js';
 import { runCliMode } from './cli-mode.js';
 import { commandExists } from './platform/index.js';
+import { autoDetectDario } from './dario-detect.js';
 import * as output from './util/output.js';
 
 export interface RunOptions {
   voice?: boolean;
   /** When set, SDK mode's tool calls are logged + stubbed — nothing fires on the host. Not supported in Claude Login mode; forces a fallback. */
   dryRun?: boolean;
+  /** When true, skip the dario auto-detect probe at startup. Use when the operator wants explicit api.anthropic.com routing despite dario being available. */
+  noDario?: boolean;
 }
 
 export async function run(prompt: string, options: RunOptions = {}): Promise<void> {
+  // Auto-detect dario before loading config so SDK initialization picks
+  // up the right ANTHROPIC_BASE_URL. Silent fall-through on no-detect;
+  // a one-line info log on detect (so users know they got the
+  // subscription path).
+  const darioResult = await autoDetectDario({ disabled: !!options.noDario });
+  if (darioResult.detected) {
+    output.info(darioResult.detail);
+  }
+
   const config = await loadConfig();
 
   // --dry-run only works in SDK mode. In Claude Login (oauth) mode, `claude`
