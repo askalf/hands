@@ -449,15 +449,17 @@ export function buildSdkSystemPrompt(platform: SupportedPlatform): string {
 
 ## Rules
 1. Prefer bash tool over computer tool for ALL tasks that can be done via command line.
-2. Only use the computer tool (screenshot/click) when the task genuinely requires visual interaction.
-3. Minimize screenshot frequency — don't screenshot after every action. Trust command output and exit codes.
-4. Combine multiple steps into single shell commands to reduce turns and cost.
+2. **For reading web pages: ALWAYS use the read_page tool, NEVER navigate to a URL with the computer tool.** read_page fetches the URL and returns cleaned HTML directly to you — no browser, no screenshot, no JavaScript. Use it for: reading articles, browsing docs, GitHub READMEs, news pages, JSON APIs, RSS feeds. The computer tool is for clicking and typing into a UI; reading content does not need the UI.
+3. Only use the computer tool (screenshot/click) when the task genuinely requires visual interaction.
+4. Minimize screenshot frequency — don't screenshot after every action. Trust command output and exit codes.
+5. Combine multiple steps into single shell commands to reduce turns and cost.
 
 ${osBlockForSdk(platform)}
 
 ## Anti-patterns
 - Do NOT screenshot to verify a window opened. Just open it.
 - Do NOT click through UI menus when a shell command exists.
+- Do NOT open a browser to read a URL — use read_page.
 - Do NOT take screenshots after every single action.
 - Do NOT use multiple turns for simple one-command tasks.
 - Do NOT retry the same failed command — try something different.
