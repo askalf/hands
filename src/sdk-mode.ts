@@ -30,13 +30,15 @@ const SCREENSHOT_MAX_WIDTH = 1280;
 export interface SdkModeOptions {
   /** When true, every tool call is logged to audit + stubbed — no shell, mouse, keyboard, or screenshot actually fires. Agent still sees "success" results so the loop continues. */
   dryRun?: boolean | undefined;
+  /** When set, replaces the default OS-aware system prompt with this exact string. Used by --persona / --system-prompt to swap in custom prompt content. */
+  systemPromptOverride?: string | undefined;
 }
 
 export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkModeOptions = {}): Promise<RunResult> {
   const client = new Anthropic({ apiKey: config.apiKey });
   const { width: realWidth, height: realHeight } = await getScreenSize();
   const model = config.model;
-  const systemPrompt = buildSdkSystemPrompt(normalizePlatform(process.platform));
+  const systemPrompt = opts.systemPromptOverride ?? buildSdkSystemPrompt(normalizePlatform(process.platform));
 
   // Calculate the display dimensions we tell Claude (matches screenshot size)
   const scaleFactor = Math.min(1.0, SCREENSHOT_MAX_WIDTH / realWidth);
