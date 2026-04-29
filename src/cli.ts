@@ -52,6 +52,7 @@ program
   .option('-t, --turns <count>', 'Max turns')
   .option('-v, --voice', 'Use voice input (microphone → whisper transcription)')
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
+  .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
   .action(async (prompt, opts) => {
     // Apply CLI overrides to config
     if (opts.model || opts.budget || opts.turns) {
@@ -62,7 +63,7 @@ program
       await saveConfig(overrides);
     }
 
-    await run(prompt, { voice: opts.voice, dryRun: opts.dryRun });
+    await run(prompt, { voice: opts.voice, dryRun: opts.dryRun, noDario: opts.dario === false });
   });
 
 program
