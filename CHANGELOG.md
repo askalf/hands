@@ -11,6 +11,85 @@ checklist.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-30
+
+Four operator-facing features bundled into one release. Net: hands gains a way to read web pages without a browser (`read_page` tool), auto-routes through dario when it's running (subscription billing without the env-var dance), accepts custom system prompts via named personas, and exposes its own audit log for inspection and replay. All additive — v0.3.0 users see no behavior change without opting into the new flags or letting the new tool surface.
+
+PRs in this release: #25 (deps bump), #26 (auto-detect dario), #27 (personas), #28 (audit list/show/replay), #29 (read_page tool).
+
+### Added — `read_page` tool: fetch URLs without a browser
+
+The agent's SDK-mode tool list grew from three to four. Alongside `computer`, `bash`, and `str_replace_based_edit_tool`, hands now ships a custom `read_page(url)` tool that fetches a URL via plain `fetch()`, runs an HTML cleanup pipeline (drop scripts/styles/iframes/svg/canvas/video, keep signal-bearing `<head>` metadata, resolve relative `href`/`src` to absolute URLs, prune cookie/consent banners by class+id selector, inline lazy-loaded image `data-src`, 80KB hard size cap), and returns the cleaned HTML directly to the agent. No nested LLM call — the agent is already a Claude model and reads HTML natively.
+
+The system prompt nudges the model toward `read_page` for every URL-reading task: *"For reading web pages: ALWAYS use the read_page tool, NEVER navigate to a URL with the computer tool."* Anti-pattern explicitly added: *"Do NOT open a browser to read a URL — use read_page."*
+
+Cost comparison (live-tested, sonnet-4-6 via dario, OAuth subscription billing):
+
+| Task | read_page | computer-tool path (estimated) |
+|------|-----------|-------------------------------|
+| Summarize Wikipedia article | 2 turns, 14k in / 307 out | 6-8 turns, ~50k+ in |
+| Read Anthropic docs | 2 turns, 11k in / 315 out | 6-8 turns, ~50k+ in |
+| Identify SPA shell | 2 turns, 2k in / 330 out | 4-6 turns, ~20k+ in |
+
+Each computer-tool screenshot costs ~1,500 tokens; `read_page` returns ~1-7K tokens of cleaned HTML for the same content. SPA shells (empty body, JS-rendered) are detected and surfaced as a metadata-only response with a clear marker — the agent honestly identifies them as SPA shells rather than hallucinating content.
+
+New dep: `cheerio` (HTML parser, ~70KB unpacked, no transitive runtime). New module: `src/util/page-cleanup.ts` with 17 unit-test assertions.
+
+### Added — auto-detect dario at startup
+
+When `ANTHROPIC_BASE_URL` isn't already set, hands probes `localhost:3456/health` at the start of `hands run`. If dario responds within 2s, sets `ANTHROPIC_BASE_URL` so the Anthropic SDK routes through it for OAuth subscription billing. Operator override always wins: env-pre-set or `--no-dario` skip the probe; `HANDS_DARIO_URL` overrides the default target for non-default ports.
+
+| Condition | Outcome |
+|---|---|
+| `ANTHROPIC_BASE_URL` already set | Respect it, no probe |
+| `--no-dario` flag | Skip probe, no env var change |
+| Dario reachable on `localhost:3456/health` | Set env var, log info line |
+| Dario not reachable | Silent fall-through to api.anthropic.com |
+| `HANDS_DARIO_URL` env set | Probe that URL instead |
+
+2s timeout — dario's first `/health` on a cold proxy is ~840ms (account pool + template state checks); subsequent hits are much faster, but the auto-detect runs once per `hands run` so the budget covers cold-path. New module: `src/dario-detect.ts` with 7 unit-test assertions.
+
+### Added — personas: named system-prompt overrides
+
+Two new flags on `hands run`:
+
+```
+--persona <name>       use a named persona (bundled or ~/.hands/personas/<name>.md)
+--system-prompt <path> use an arbitrary prompt file (bypasses --persona)
+```
+
+Bundled personas: `minimal` (short, no constraints), `thorough` (take initiative, exhaustive code with comments), `concise` (terse, no preamble), `security-aware` (confirm-before-destructive). User overrides at `~/.hands/personas/<name>.md` take precedence over the bundled set. Mutex: `--persona` and `--system-prompt` are mutually exclusive — both set exits 1 with a clear error before doing any other work.
+
+Why it's safe to ship: dario research ([askalf/dario#172](https://github.com/askalf/dario/discussions/172)) confirmed the billing classifier doesn't fingerprint system prompt content — content, length, and block count are not classifier inputs. Combined with hands routing through dario for OAuth subscription billing, swapping the system prompt does NOT flip billing from `five_hour` to `overage`. Personas are the operator-facing surface for that capability.
+
+SDK mode only — CLI mode (which spawns `claude --append-system-prompt`) doesn't plumb `--persona` through yet; the integration there is meaningfully different and gets its own future PR. New module: `src/personas.ts` with 7 unit-test assertions.
+
+### Added — `hands audit list/show/replay`
+
+Three subcommands under `hands audit`:
+
+```
+hands audit list [--last N]     show recent entries with replay index
+hands audit show <index>        full JSON detail for one entry
+hands audit replay <index>      re-execute the entry's tool call
+                                (dry-run by default; --execute fires)
+```
+
+The audit log at `~/.hands/audit.jsonl` already records every SDK-mode tool call; this surface lets operators inspect what the agent did and re-run individual actions deterministically. Useful for *"the agent did something I didn't watch closely — show me what"* and for repeating a known-good action sequence on a fresh state.
+
+Replay safety:
+
+- Default is dry-run — `replay <index>` prints what would happen, doesn't fire the tool. Operator must pass `--execute` to actually re-run.
+- Each `--execute` prompts before firing for state-changing actions: clicks, typing, key presses, scrolls, every bash command, and text_editor str_replace/create/insert. Read-only actions (computer:screenshot, computer:mouse_move, text_editor:view) fire immediately.
+- text_editor replay only handles `view` — create/str_replace/insert require original input fields (`file_text`, `old_str`, `new_str`) which the audit summarizer may truncate. Refuse rather than guess.
+- Replay does NOT re-run the LLM. Pure tool-call replay; no model invocation, no token spend.
+
+New module: `src/audit-replay.ts` with 12 unit-test assertions. Test count goes 49 → 66 (+17 across this release total).
+
+### Changed — dependency bump
+
+`@anthropic-ai/sdk` upgraded by Dependabot (#25). No behavior change.
+
 ## [0.3.0] - 2026-04-25
 
 Cross-platform system prompts (no longer Windows-only despite the platform abstraction), CodeQL clear-text-logging fix, and a production-ready README rewrite. Both functional changes are additive — v0.2.0 Windows users see no behavior change. macOS / Linux operation is now intended-to-work but **empirically un-smoked** — the system-prompt branching is unit-tested but the LLM behavior under it is not yet verified against real model use on a non-Windows host. First post-publish report from a Mac or Linux user is the signal that locks in the "cross-platform" claim.
