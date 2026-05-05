@@ -9,6 +9,7 @@ import { checkCommand } from './util/guardrails.js';
 import { appendAudit } from './util/audit.js';
 import { buildSdkSystemPrompt, normalizePlatform } from './system-prompt.js';
 import { readPage } from './tools/read-page.js';
+import { findFiles } from './tools/find-files.js';
 
 interface RunResult {
   text: string;
@@ -89,6 +90,38 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
         required: ['url'],
       },
     } as unknown as Anthropic.Beta.BetaTool,
+    // Custom tool — recursively list / search files in a directory
+    // tree without spawning N bash turns. See src/tools/find-files.ts.
+    {
+      name: 'find_files',
+      description: 'Recursively list or search files under a directory. Use this INSTEAD OF chaining `bash ls` + `cat` + `grep` calls — one find_files turn replaces 3-10 bash turns. Two modes: (1) list mode — pass `name_pattern` (basename glob like `*.ts` or `test_*.py`) to enumerate matching files with sizes; (2) grep mode — also pass `grep` (regex) to return file:line:content matches across matching files. Skips noisy dirs by default (node_modules, .git, dist, build, .next, .cache, venv, target, __pycache__). For: locating a file by name, finding all files of a type, searching for a symbol or string across the codebase, surveying a directory the user just mentioned. Use the str_replace_based_edit_tool or bash to actually open / read full file content once find_files has located it.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Root directory to walk. Defaults to current working directory.',
+          },
+          name_pattern: {
+            type: 'string',
+            description: 'Basename glob to filter files (e.g. "*.ts", "test_*.py", "{a,b}.md"). Supports * (any chars), ? (single char), {a,b} (alternation). Matched against file basename only, not the full path. Omit to match all files.',
+          },
+          grep: {
+            type: 'string',
+            description: 'Optional regex to search for inside the matched files. When set, returns file:line:content matches instead of a file list. Standard JS regex syntax.',
+          },
+          max_depth: {
+            type: 'number',
+            description: 'Max directory depth to walk. Default 10.',
+          },
+          max_results: {
+            type: 'number',
+            description: 'Max files (list mode) or matches (grep mode) to return. Default 50.',
+          },
+        },
+        required: [],
+      },
+    } as unknown as Anthropic.Beta.BetaTool,
   ];
 
   const messages: Anthropic.Beta.BetaMessageParam[] = [
@@ -147,6 +180,8 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
         try {
           if (block.name === 'read_page') {
             result = await executeReadPage(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
+          } else if (block.name === 'find_files') {
+            result = await executeFindFiles(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
           } else {
             result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun });
           }
@@ -285,6 +320,15 @@ function describeCall(toolName: string, input: Record<string, unknown>): string 
     const url = input['url'] as string | undefined;
     return url ? url.slice(0, 80) : 'read_page';
   }
+  if (toolName === 'find_files') {
+    const path = (input['path'] as string | undefined) ?? '.';
+    const pat = input['name_pattern'] as string | undefined;
+    const grep = input['grep'] as string | undefined;
+    const parts = [path];
+    if (pat) parts.push(`name=${pat}`);
+    if (grep) parts.push(`grep=/${grep}/`);
+    return parts.join(' ');
+  }
   return toolName;
 }
 
@@ -344,6 +388,62 @@ async function executeReadPage(
       error: msg.slice(0, 200),
     });
     return [{ type: 'text', text: `Error fetching ${url}: ${msg}` }];
+  }
+}
+
+/**
+ * Dispatcher for the `find_files` custom tool. Audit + dry-run shape
+ * mirrors `executeReadPage`. Read-only by construction — dry-run still
+ * skips the walk so behavior is consistent with the other tools when
+ * the user asks for a no-side-effects rehearsal.
+ */
+async function executeFindFiles(
+  input: Record<string, unknown>,
+  opts: { dryRun?: boolean | undefined } = {},
+): Promise<Array<{ type: string; text?: string }>> {
+  const path = input['path'] as string | undefined;
+  const namePattern = input['name_pattern'] as string | undefined;
+  const grep = input['grep'] as string | undefined;
+  const maxDepth = input['max_depth'] as number | undefined;
+  const maxResults = input['max_results'] as number | undefined;
+
+  const auditArgs: Record<string, unknown> = {};
+  if (path !== undefined) auditArgs['path'] = path;
+  if (namePattern !== undefined) auditArgs['name_pattern'] = namePattern;
+  if (grep !== undefined) auditArgs['grep'] = grep;
+  if (maxDepth !== undefined) auditArgs['max_depth'] = maxDepth;
+  if (maxResults !== undefined) auditArgs['max_results'] = maxResults;
+
+  const summary = describeCall('find_files', input);
+
+  if (opts.dryRun) {
+    output.action('find_files', `[dry-run] ${summary}`);
+    await appendAudit({ tool: 'find_files', args: auditArgs, durationMs: 0, ok: true, dryRun: true });
+    return [{ type: 'text', text: `[dry-run] Would search ${summary}. Run without --dry-run to actually walk.` }];
+  }
+
+  output.action('find_files', summary);
+  const start = Date.now();
+  try {
+    const callOpts: Record<string, unknown> = {};
+    if (path !== undefined) callOpts['path'] = path;
+    if (namePattern !== undefined) callOpts['namePattern'] = namePattern;
+    if (grep !== undefined) callOpts['grep'] = grep;
+    if (maxDepth !== undefined) callOpts['maxDepth'] = maxDepth;
+    if (maxResults !== undefined) callOpts['maxResults'] = maxResults;
+    const result = await findFiles(callOpts as Parameters<typeof findFiles>[0]);
+    await appendAudit({ tool: 'find_files', args: auditArgs, durationMs: Date.now() - start, ok: true });
+    return [{ type: 'text', text: result.text }];
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await appendAudit({
+      tool: 'find_files',
+      args: auditArgs,
+      durationMs: Date.now() - start,
+      ok: false,
+      error: msg.slice(0, 200),
+    });
+    return [{ type: 'text', text: `Error in find_files: ${msg}` }];
   }
 }
 

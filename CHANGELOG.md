@@ -11,6 +11,16 @@ checklist.
 
 ## [Unreleased]
 
+### Added — `find_files` tool: list / search files in one turn
+
+A new SDK-mode tool that replaces the agent's chained `bash ls` + `cat` + `grep` loops with a single call. List mode (`name_pattern`, basename glob like `*.ts` or `{a,b}.md`) enumerates matching files with sizes; grep mode (also pass `grep`, a regex) returns `file:line:content` matches across the matched set. Default excludes — `node_modules`, `.git`, `dist`, `build`, `.next`, `.cache`, `target`, `__pycache__`, `.venv`, `venv`, `coverage` — are baked in, so the agent doesn't have to remember `find -not -path` flags every time. Walker caps: `max_depth=10`, `max_results=50`, `max_bytes=50KB` on the rendered response, `1MB` per-file read cap, NUL-byte heuristic for skipping binaries.
+
+System-prompt nudge mirrors the `read_page` framing: *"For locating files or searching code: use the find_files tool, not chained bash ls + cat + grep calls."* Anti-pattern added: *"Do NOT chain ls + cat + grep to find or search files — use find_files in one turn."*
+
+The tool is read-only by construction (no rename, no move, no write). Heavier file operations stay on `str_replace_based_edit_tool` and `bash`.
+
+New module: `src/tools/find-files.ts` with 11 unit-test assertions covering glob conversion (`*`, `?`, `{a,b}`, regex-escape), default excludes, list / grep mode separation, `max_results` truncation reporting, invalid-regex error, and missing-path error.
+
 ## [0.4.0] - 2026-04-30
 
 Four operator-facing features bundled into one release. Net: hands gains a way to read web pages without a browser (`read_page` tool), auto-routes through dario when it's running (subscription billing without the env-var dance), accepts custom system prompts via named personas, and exposes its own audit log for inspection and replay. All additive — v0.3.0 users see no behavior change without opting into the new flags or letting the new tool surface.
