@@ -23,7 +23,7 @@
     "CHANGELOG.md"
   ],
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.91.0",
+    "@anthropic-ai/sdk": "^0.92.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.1",
     "cheerio": "^1.2.0",
