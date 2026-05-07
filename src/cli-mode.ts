@@ -8,7 +8,8 @@ import chalk from 'chalk';
 import * as output from './util/output.js';
 import type { AgentConfig } from './util/config.js';
 import { VoiceInput } from './voice/index.js';
-import { buildCliSystemPrompt, normalizePlatform } from './system-prompt.js';
+import { buildCliSystemPrompt, normalizePlatform, type SupportedPlatform } from './system-prompt.js';
+import type { PersonaResolution } from './personas.js';
 
 interface RunResult {
   text: string;
@@ -30,6 +31,32 @@ interface SessionMemory {
 
 export interface CliModeOptions {
   voice?: boolean | undefined;
+  /** When set, replaces the default OS-aware system-prompt content with the persona's text. The persona prompt is still appended via `claude --append-system-prompt`, so it stacks on Claude Code's built-in prompt rather than replacing it (CLI mode has no hook to fully replace). Session context (history + lessons) is preserved either way. */
+  persona?: PersonaResolution | undefined;
+}
+
+/**
+ * Compose the string we hand to `claude --append-system-prompt`.
+ * Pure function — pulled out of `spawnClaude` so the persona-vs-default
+ * branching is unit-testable without spawning a child process.
+ *
+ * Two paths:
+ *   - No persona: hands' default OS-aware prompt + session context
+ *     (existing behavior, unchanged).
+ *   - Persona set: persona prompt + session context. The OS-aware
+ *     block is dropped on the operator's behalf — the persona is the
+ *     statement of intent, and Claude Code's built-in prompt already
+ *     covers basic computer-use orchestration.
+ */
+export function composeCliAppendPrompt(
+  platform: SupportedPlatform,
+  sessionContext: string,
+  persona: PersonaResolution | undefined,
+): string {
+  if (!persona) {
+    return buildCliSystemPrompt(platform, sessionContext);
+  }
+  return sessionContext ? `${persona.prompt}\n\n${sessionContext}` : persona.prompt;
 }
 
 export async function runCliMode(prompt: string, config: AgentConfig, options: CliModeOptions = {}): Promise<RunResult> {
@@ -71,7 +98,7 @@ export async function runCliMode(prompt: string, config: AgentConfig, options: C
     while (true) {
       output.info(`\n→ ${currentPrompt}\n`);
 
-      const result = await spawnClaude(currentPrompt, config, mcpConfigPath, sessionMemory);
+      const result = await spawnClaude(currentPrompt, config, mcpConfigPath, sessionMemory, options.persona);
       totalTurns += result.turns;
 
       // Record what happened for future turns
@@ -194,10 +221,10 @@ function buildSessionContext(memory: SessionMemory): string {
   return parts.join('\n');
 }
 
-function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string, memory: SessionMemory): Promise<RunResult> {
+function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string, memory: SessionMemory, persona: PersonaResolution | undefined): Promise<RunResult> {
   return new Promise((resolvePromise, reject) => {
     const sessionContext = buildSessionContext(memory);
-    const systemPrompt = buildCliSystemPrompt(normalizePlatform(process.platform), sessionContext);
+    const systemPrompt = composeCliAppendPrompt(normalizePlatform(process.platform), sessionContext, persona);
 
     const args = [
       '-p', prompt,
