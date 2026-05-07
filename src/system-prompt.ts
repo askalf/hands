@@ -450,9 +450,10 @@ export function buildSdkSystemPrompt(platform: SupportedPlatform): string {
 ## Rules
 1. Prefer bash tool over computer tool for ALL tasks that can be done via command line.
 2. **For reading web pages: ALWAYS use the read_page tool, NEVER navigate to a URL with the computer tool.** read_page fetches the URL and returns cleaned HTML directly to you — no browser, no screenshot, no JavaScript. Use it for: reading articles, browsing docs, GitHub READMEs, news pages, JSON APIs, RSS feeds. The computer tool is for clicking and typing into a UI; reading content does not need the UI.
-3. Only use the computer tool (screenshot/click) when the task genuinely requires visual interaction.
-4. Minimize screenshot frequency — don't screenshot after every action. Trust command output and exit codes.
-5. Combine multiple steps into single shell commands to reduce turns and cost.
+3. **For locating files or searching code: use the find_files tool, not chained bash ls + cat + grep calls.** One find_files turn replaces 3-10 bash turns. List mode (name_pattern like "*.ts") enumerates files; grep mode (also pass grep) returns file:line:content matches. It already skips node_modules / .git / dist / build / etc. so you don't need to remember exclude flags.
+4. Only use the computer tool (screenshot/click) when the task genuinely requires visual interaction.
+5. Minimize screenshot frequency — don't screenshot after every action. Trust command output and exit codes.
+6. Combine multiple steps into single shell commands to reduce turns and cost.
 
 ${osBlockForSdk(platform)}
 
@@ -460,6 +461,7 @@ ${osBlockForSdk(platform)}
 - Do NOT screenshot to verify a window opened. Just open it.
 - Do NOT click through UI menus when a shell command exists.
 - Do NOT open a browser to read a URL — use read_page.
+- Do NOT chain ls + cat + grep to find or search files — use find_files in one turn.
 - Do NOT take screenshots after every single action.
 - Do NOT use multiple turns for simple one-command tasks.
 - Do NOT retry the same failed command — try something different.
