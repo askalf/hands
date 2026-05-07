@@ -21,6 +21,14 @@ The tool is read-only by construction (no rename, no move, no write). Heavier fi
 
 New module: `src/tools/find-files.ts` with 11 unit-test assertions covering glob conversion (`*`, `?`, `{a,b}`, regex-escape), default excludes, list / grep mode separation, `max_results` truncation reporting, invalid-regex error, and missing-path error.
 
+### Changed — `--persona` and `--system-prompt` now work in CLI mode
+
+The flags shipped in v0.4.0 against SDK mode only; CLI mode (the default Claude Login path) ignored them. They now thread through to `runCliMode` and become the value of `claude --append-system-prompt`. When a persona is set, hands' OS-aware default block is dropped (Claude Code's built-in prompt already covers basic computer-use orchestration); session context — task history + lessons learned across the interactive loop — is preserved either way.
+
+Semantic note: SDK mode replaces the entire system prompt with the persona text; CLI mode appends to Claude Code's built-in prompt because there is no full-replacement hook. The end-user effect is the same — the persona's defaults (verbosity, autonomy, tool framing) take effect — with the caveat that CLI mode keeps Claude Code's general-purpose framing as the substrate.
+
+New pure helper: `composeCliAppendPrompt(platform, sessionContext, persona)` in `src/cli-mode.ts`, with 6 unit-test assertions covering both branches (no-persona / persona-set), session-context preservation, and OS-aware-default suppression on Windows / macOS / Linux when a persona is active.
+
 ## [0.4.0] - 2026-04-30
 
 Four operator-facing features bundled into one release. Net: hands gains a way to read web pages without a browser (`read_page` tool), auto-routes through dario when it's running (subscription billing without the env-var dance), accepts custom system prompts via named personas, and exposes its own audit log for inspection and replay. All additive — v0.3.0 users see no behavior change without opting into the new flags or letting the new tool surface.

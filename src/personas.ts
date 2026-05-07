@@ -26,9 +26,11 @@ import { join } from 'node:path';
  *   - the file at <path>, period. Bypasses --persona and the
  *     bundled set. For one-off / external prompts.
  *
- * Both flags only affect SDK mode (the API-key / dario-routed
- * path). CLI mode (Claude Login spawning `claude`) doesn't pass
- * them through — adding them there is a future PR.
+ * Both flags work in SDK mode (full system-prompt replacement) and
+ * CLI mode (the persona text is passed as `--append-system-prompt`,
+ * stacking on Claude Code's built-in prompt — there is no hook to
+ * fully replace in CLI mode, so we drop hands' OS-aware default
+ * instead and let Claude Code's prompt carry the basics).
  */
 
 export interface PersonaResolution {
