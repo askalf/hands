@@ -11,6 +11,12 @@ checklist.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-07
+
+One new agent capability (`find_files`), one gap-closer from v0.4.0 (personas now work in CLI mode, not just SDK mode), and three dependency bumps. All additive — v0.4.0 users see no behavior change without opting into the new tool surface or `--persona` flag.
+
+PRs in this release: #31 (codeql-action 3.35.2 → 4.35.3), #32 (`@anthropic-ai/sdk` 0.91.1 → 0.92.0), #33 (find_files tool), #34 (persona-CLI plumbing), #35 (ip-address + express-rate-limit transitive bumps).
+
 ### Added — `find_files` tool: list / search files in one turn
 
 A new SDK-mode tool that replaces the agent's chained `bash ls` + `cat` + `grep` loops with a single call. List mode (`name_pattern`, basename glob like `*.ts` or `{a,b}.md`) enumerates matching files with sizes; grep mode (also pass `grep`, a regex) returns `file:line:content` matches across the matched set. Default excludes — `node_modules`, `.git`, `dist`, `build`, `.next`, `.cache`, `target`, `__pycache__`, `.venv`, `venv`, `coverage` — are baked in, so the agent doesn't have to remember `find -not -path` flags every time. Walker caps: `max_depth=10`, `max_results=50`, `max_bytes=50KB` on the rendered response, `1MB` per-file read cap, NUL-byte heuristic for skipping binaries.
