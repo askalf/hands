@@ -101,7 +101,10 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
   try {
     if (config.authMode === 'oauth') {
       // CLI mode handles its own interactive loop and output
-      await runCliMode(prompt, config, { voice: options.voice });
+      await runCliMode(prompt, config, {
+        voice: options.voice,
+        ...(personaResolution ? { persona: personaResolution } : {}),
+      });
     } else {
       const result = await runSdkMode(prompt, config, {
         dryRun: options.dryRun,
