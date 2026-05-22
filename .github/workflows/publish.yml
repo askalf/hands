@@ -16,6 +16,15 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  # workflow_dispatch is the rescue path for a stranded release —
+  # publishes whatever's in package.json on the dispatched ref to npm.
+  # Needed because auto-release.yml's one-axis version-diff gate cannot
+  # retry a failed publish (it short-circuits when HEAD vs HEAD^1 shows
+  # no version bump, regardless of whether npm has the version). Used
+  # 2026-05-22 to backfill v0.4.1 after the 2026-05-07 auto-release run
+  # failed at `npm publish` with E404 (stale NPM_TOKEN); the GitHub
+  # release exists, npm just never got the artifact.
+  workflow_dispatch:
 
 permissions:
   contents: read
