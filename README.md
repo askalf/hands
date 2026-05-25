@@ -101,6 +101,40 @@ A screenshot MCP tool is available when Claude needs to visually verify what's o
 
 ---
 
+## 10 example tasks
+
+Concrete things people have actually run, grouped by what the agent leans on most. Every one is a single `hands run "..."` invocation.
+
+**Shell-heavy (PowerShell / bash / zsh)**
+
+1. `hands run "rename all PNG files in C:\Users\me\Screenshots by their dimensions, like 1920x1080.png"` — bulk rename on Windows via `Get-ChildItem` + `System.Drawing`. No screenshot loop.
+
+2. `hands run "in ~/projects/api, pull main, install deps, run the tests, and tell me which ones failed"` — multi-step dev workflow; agent stays in the terminal end-to-end.
+
+3. `hands run "tail the last 200 lines of /var/log/syslog, find anything mentioning oom or killed, and summarize"` — log triage on Linux; one `tail` + `grep` chain, then the model summarizes inline.
+
+4. `hands run "list every brew package that has an update available, then run brew upgrade only for the ones that aren't pinned"` — macOS package maintenance; respects `brew pin` without being reminded.
+
+**OS automation (osascript / xdotool / ydotool)**
+
+5. `hands run "tile firefox left, terminal right, both full-height"` — window management on Linux; agent picks `wmctrl` on X11 or the Wayland equivalent.
+
+6. `hands run "screenshot the active window and save it to my desktop with today's date in the filename"` — Win/macOS/Linux each have a one-line shell command; agent picks the right one per `process.platform`.
+
+7. `hands run "open my next calendar event in zoom, open the attached doc in Preview, and mute notifications for an hour"` — macOS chain using `osascript` + `open -a` + Focus toggle.
+
+**Browser / mixed (shell + screenshot when needed)**
+
+8. `hands run "for every PDF in Downloads from this week, save the first page as a JPEG into Downloads/thumbnails/"` — `find` + `pdftoppm` on Unix or `magick` on Windows; no GUI loop.
+
+9. `hands run "read what's on my clipboard, translate it to French via deepl.com, and put the translation back on the clipboard"` — clipboard-in, clipboard-out; needs a screenshot or two for the browser step, then `pbcopy` / `Set-Clipboard` / `xclip` to finish.
+
+**Voice (`--voice`)**
+
+10. `hands run "open three news sites and summarize the top story on each into a single bulleted list in a new TextEdit document" --voice` — speak the prompt instead of typing; whisper.cpp transcribes locally, no audio leaves the machine.
+
+Run any of these with `--dry-run` first to see the model's plan and the tool calls it intends to fire, before letting it touch your machine.
+
 ## How it works
 
 Two run modes, one consistent UX:
