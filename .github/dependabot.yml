@@ -20,6 +20,14 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # @types/node tracks the Node runtime. hands' engines.node is ">=20.0.0"
+      # and devDep is pinned to "^22.0.0" — accepting a major bump to v25+ would
+      # pull in type signatures that don't match the supported runtime matrix
+      # (Node 20 + 22) and break tsc. Re-evaluate when hands drops Node 20.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
     commit-message:
       prefix: chore
       include: scope
