@@ -421,7 +421,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 
 - **Bugs / feature requests** — open an [issue](https://github.com/askalf/hands/issues). Include `hands doctor --json` output and the failing prompt.
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
-- **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / claude-bridge / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
+- **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
 Run `npm install && npm run build && npm test` to get a working dev tree (49 assertions across 5 test files; runs in ~2s).
 
@@ -429,13 +429,13 @@ Run `npm install && npm run build && npm test` to get a working dev tree (49 ass
 
 ## Full Platform
 
-This CLI is a standalone computer-use agent. For the full autonomous fleet — 7 core agents, persistent memory, 16 communication channels (including OpenClaw bridge), 28 marketplace packages, and a mission control dashboard:
+This CLI is a standalone computer-use agent. For the broader askalf workforce — a Docker-Compose stack with 18 specialist agents and an orchestrator working tickets autonomously, a dashboard for supervising them, and LLM routing through dario so you can bring your own Claude Max subscription:
 
 ```bash
 curl -fsSL https://get.askalf.org | bash
 ```
 
-[askalf.org](https://askalf.org) | [GitHub](https://github.com/SprayberryLabs/askalf) | [Architecture](https://github.com/SprayberryLabs/askalf/blob/main/docs/ARCHITECTURE.md)
+[askalf.org](https://askalf.org) · [askalf/platform](https://github.com/askalf/platform) · [FLEET.md](https://github.com/askalf/platform/blob/main/docs/FLEET.md)
 
 ---
 
@@ -457,13 +457,13 @@ MIT
 
 | Project | What it does |
 |---------|-------------|
-| [arnie](https://github.com/askalf/arnie) | Portable IT troubleshooting companion. Networking, AD, Windows Update, package managers, log triage, hardware checks. |
-| [brio](https://github.com/askalf/brio) | Capability layer for AI workloads — semantic cache, cost tiering, policy. Sits in front of any Anthropic-compat endpoint. |
+| [agent](https://github.com/askalf/agent) | Device connector. Registers any machine with your askalf forge so the fleet can run shell or Claude Code tasks on it. |
 | [browser-bridge](https://github.com/askalf/browser-bridge) | Stealth headless Chromium in a container. CDP on 9222 — Playwright/Puppeteer/MCP-compatible. |
-| [claude-bridge](https://github.com/askalf/claude-bridge) | Bridge Claude Code sessions to Discord. |
+| [claude-sync](https://github.com/askalf/claude-sync) | Cross-machine Claude Code session sync. |
 | [dario](https://github.com/askalf/dario) | Local LLM router. Use your Claude Max/Pro subscription as an API. |
 | [deepdive](https://github.com/askalf/deepdive) | Local research agent. Plan → search → fetch → extract → synthesize. Cited answers. |
 | [git-providers](https://github.com/askalf/git-providers) | Unified GitHub + GitLab + Bitbucket Cloud REST clients behind one GitProvider interface. Plus a 44-entry api-key-provider taxonomy. |
 | [install-kit](https://github.com/askalf/install-kit) | curl-pipe-bash template for self-hosted Docker apps. |
 | [pgflex](https://github.com/askalf/pgflex) | One Postgres API. Two modes (real PG ↔ PGlite WASM). |
+| [platform](https://github.com/askalf/platform) | The full self-hosted askalf workforce — forge, dashboard, fleet of specialists. |
 | [redisflex](https://github.com/askalf/redisflex) | One Redis API. Two modes (ioredis ↔ in-process). |
