@@ -3,6 +3,8 @@
   <p align="center"><strong>Your LLM on your mouse, keyboard, and screen.</strong><br>A local computer-use agent that drives the OS through its native shell — PowerShell on Windows, <code>open</code> + AppleScript on macOS, <code>xdotool</code> / <code>ydotool</code> on Linux. Voice optional. Routes through <a href="https://github.com/askalf/dario">dario</a> or any Anthropic-compat endpoint, so the per-task token spend bills against the Claude Max subscription you already pay for instead of a hosted research-tool tier on top.</p>
 </p>
 
+<p align="center">In short, <code>@askalf/hands</code> is a command-line tool you install globally from npm and drive from your terminal — give it a plain-language task and it carries that task out on your own machine.</p>
+
 <p align="center"><em>Pre-1.0. MIT. Independent, unofficial, third-party — see <a href="DISCLAIMER.md">DISCLAIMER</a>.</em></p>
 
 <p align="center">
