@@ -542,15 +542,51 @@ async function executeComputerActionInner(
       return [{ type: 'text', text: `Error: ${msg}` }];
     }
   } else if (toolName === 'str_replace_based_edit_tool') {
-    output.action('text_editor', input['command'] as string);
-    // Delegate to bash for file operations
-    const { execSync } = await import('node:child_process');
+    const command = input['command'] as string;
+    const path = input['path'] as string;
+    output.action('text_editor', `${command} ${path ?? ''}`.trim());
+    // File operations run through node:fs directly — NEVER through a shell.
+    // (A previous version shelled out to `cat "<path>"`, which let a path
+    // containing shell metacharacters inject commands and bypass the bash
+    // guardrail. fs takes the path as a literal value, so there is no shell
+    // to inject into.)
+    const fs = await import('node:fs/promises');
     try {
-      if (input['command'] === 'view') {
-        const result = execSync(`cat "${input['path']}"`, { encoding: 'utf-8', maxBuffer: 1024 * 1024 });
-        return [{ type: 'text', text: result }];
+      if (command === 'view') {
+        const content = await fs.readFile(path, 'utf-8');
+        const range = input['view_range'] as [number, number] | undefined;
+        if (Array.isArray(range) && range.length === 2) {
+          const lines = content.split('\n');
+          const [start, end] = range;
+          const slice = lines.slice(Math.max(0, start - 1), end === -1 ? undefined : end);
+          return [{ type: 'text', text: slice.join('\n') }];
+        }
+        return [{ type: 'text', text: content }];
       }
-      return [{ type: 'text', text: 'Text editor operations handled via bash' }];
+      if (command === 'create') {
+        await fs.writeFile(path, (input['file_text'] as string) ?? '', 'utf-8');
+        return [{ type: 'text', text: `Created ${path}` }];
+      }
+      if (command === 'str_replace') {
+        const oldStr = input['old_str'] as string;
+        const newStr = (input['new_str'] as string) ?? '';
+        const content = await fs.readFile(path, 'utf-8');
+        const occurrences = content.split(oldStr).length - 1;
+        if (occurrences === 0) return [{ type: 'text', text: `Error: old_str not found in ${path}.` }];
+        if (occurrences > 1) return [{ type: 'text', text: `Error: old_str matched ${occurrences} times in ${path}; make it unique (include surrounding context).` }];
+        await fs.writeFile(path, content.replace(oldStr, newStr), 'utf-8');
+        return [{ type: 'text', text: `Replaced 1 occurrence in ${path}.` }];
+      }
+      if (command === 'insert') {
+        const insertLine = (input['insert_line'] as number) ?? 0;
+        const newStr = (input['new_str'] as string) ?? '';
+        const content = await fs.readFile(path, 'utf-8');
+        const lines = content.split('\n');
+        lines.splice(Math.max(0, insertLine), 0, newStr);
+        await fs.writeFile(path, lines.join('\n'), 'utf-8');
+        return [{ type: 'text', text: `Inserted text after line ${insertLine} in ${path}.` }];
+      }
+      return [{ type: 'text', text: `Unsupported text editor command: ${command}. Supported: view, create, str_replace, insert.` }];
     } catch (err) {
       return [{ type: 'text', text: `Error: ${err instanceof Error ? err.message : String(err)}` }];
     }
