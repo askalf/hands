@@ -11,6 +11,18 @@ checklist.
 
 ## [Unreleased]
 
+### Added — full `computer_20251124` action set (zoom, drag, triple-click, hold_key, wait, horizontal scroll, modifier clicks)
+
+The SDK-mode tool declaration promised `computer_20251124`, but the dispatcher implemented only the 2024-10-22 action set — `triple_click`, `hold_key`, `wait`, `left_mouse_down/up`, `left_click_drag`, and `middle_click` all returned "Unknown computer action", and `scroll_direction: left/right` was silently coerced to `down`. The model was burning turns on capabilities that failed at runtime. The dispatcher now implements every documented action:
+
+- **zoom** — view a region of the screen at full resolution (`enable_zoom: true` now set on the tool). Region captures go through native region-capture flags (`screencapture -R`, `grim -g`, `scrot -a`, `CopyFromScreen` rect) with no downscaling, so small text is actually legible.
+- **left_click_drag**, **left_mouse_down/up**, **triple_click**, **middle_click** — implemented across all three platforms.
+- **hold_key** (duration-clamped to 10s) and **wait** (clamped to 30s).
+- **scroll** in all four directions — X11 wheel buttons 6/7, Windows `MOUSEEVENTF_HWHEEL`, ydotool wheel mode for horizontal.
+- **Modifier clicks/scrolls** — the documented `text` param (`shift`/`ctrl`/`alt`/`super`) is honored on click and scroll actions (best-effort skipped on Wayland).
+
+Also fixed in passing: the macOS scroll implementation used AppleScript verbs that don't exist in System Events (`set position of mouse`, `scroll`) and errored on every call — replaced with cursor positioning + Page Up/Down / arrow-key presses (macOS has no CLI wheel synthesis). Every mouse/keyboard/screenshot adapter call now carries a 15s timeout, so a hung `xdotool`/`cliclick`/`powershell` can no longer stall the agent's turn indefinitely. Action-set parity is pinned in `test/computer-actions.test.mjs` against the documented 2025-11-24 list.
+
 ## [0.4.3] - 2026-06-10
 
 Hardening + Windows-reliability release, all from the same internal repo review that produced v0.4.2. Headliners: Claude Login mode actually works on Windows npm installs now (it spawned nothing before), `read_page` refuses private/internal targets, screenshot context no longer grows unbounded, and `~/.hands/config.json` stopped being world-readable. Plus a Windows CI leg so the headline platform stays tested.

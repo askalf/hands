@@ -4,18 +4,22 @@ import { getPlatform, getDisplayServer } from './index.js';
 
 const execFileAsync = promisify(execFile);
 
+// Hard timeout on every adapter call — a hung tool otherwise stalls the
+// agent's whole turn. Generous enough for hold_key's max duration.
+const EXEC_OPTS = { timeout: 15_000 };
+
 export async function keyboardType(text: string): Promise<void> {
   const platform = getPlatform();
 
   if (platform === 'darwin') {
     // cliclick t: for typing text
-    await execFileAsync('cliclick', [`t:${text}`]);
+    await execFileAsync('cliclick', [`t:${text}`], EXEC_OPTS);
   } else if (platform === 'linux') {
     const ds = getDisplayServer();
     if (ds === 'wayland') {
-      await execFileAsync('ydotool', ['type', '--', text]);
+      await execFileAsync('ydotool', ['type', '--', text], EXEC_OPTS);
     } else {
-      await execFileAsync('xdotool', ['type', '--clearmodifiers', '--', text]);
+      await execFileAsync('xdotool', ['type', '--clearmodifiers', '--', text], EXEC_OPTS);
     }
   } else if (platform === 'win32') {
     // Escape special SendKeys characters
@@ -24,7 +28,7 @@ export async function keyboardType(text: string): Promise<void> {
       Add-Type -AssemblyName System.Windows.Forms
       [System.Windows.Forms.SendKeys]::SendWait('${escaped.replace(/'/g, "''")}')
     `;
-    await execFileAsync('powershell', ['-NoProfile', '-Command', script]);
+    await execFileAsync('powershell', ['-NoProfile', '-Command', script], EXEC_OPTS);
   }
 }
 
@@ -96,20 +100,93 @@ async function keyPressMac(parts: string[]): Promise<void> {
   if (key) {
     const modStr = modifiers.length > 0 ? modifiers.join(',') + ' ' : '';
     // cliclick kp:modifier key
-    await execFileAsync('cliclick', [`kp:${modStr}${key}`]);
+    await execFileAsync('cliclick', [`kp:${modStr}${key}`], EXEC_OPTS);
   }
 }
 
 async function keyPressXdotool(parts: string[]): Promise<void> {
   const mapped = parts.map(p => KEY_MAP_XDOTOOL[p] ?? p);
-  await execFileAsync('xdotool', ['key', mapped.join('+')]);
+  await execFileAsync('xdotool', ['key', mapped.join('+')], EXEC_OPTS);
 }
 
 async function keyPressYdotool(parts: string[]): Promise<void> {
   // ydotool uses kernel keycodes — simplified approach using xdotool key names
   // For full ydotool support, would need keycode mapping
   const mapped = parts.map(p => KEY_MAP_XDOTOOL[p] ?? p);
-  await execFileAsync('ydotool', ['key', mapped.join('+')]);
+  await execFileAsync('ydotool', ['key', mapped.join('+')], EXEC_OPTS);
+}
+
+// VK codes for keys the hold_key action commonly targets on Windows.
+const VK_WIN: Record<string, number> = {
+  ctrl: 0x11, control: 0x11, alt: 0x12, shift: 0x10,
+  super: 0x5B, meta: 0x5B, win: 0x5B, cmd: 0x5B, command: 0x5B,
+  return: 0x0D, enter: 0x0D, tab: 0x09, escape: 0x1B, space: 0x20,
+  backspace: 0x08, delete: 0x2E,
+  left: 0x25, up: 0x26, right: 0x27, down: 0x28,
+  home: 0x24, end: 0x23, pageup: 0x21, pagedown: 0x22,
+};
+
+// macOS virtual key codes for named keys (System Events `key code N`).
+const KEYCODE_MAC: Record<string, number> = {
+  return: 36, enter: 36, tab: 48, space: 49, backspace: 51, delete: 117,
+  escape: 53, left: 123, right: 124, down: 125, up: 126,
+  home: 115, end: 119, pageup: 116, pagedown: 121,
+};
+
+/**
+ * Hold a key down for `durationSec` seconds, then release. This is the
+ * computer-use `hold_key` action — distinct from `key` (press+release)
+ * and from the modifier param on clicks (hold while doing something
+ * else). Duration is clamped to [0.1, 10] so a confused model can't
+ * wedge the keyboard.
+ */
+export async function keyboardHoldKey(key: string, durationSec: number): Promise<void> {
+  const platform = getPlatform();
+  const duration = Math.min(10, Math.max(0.1, durationSec));
+  const name = key.toLowerCase().trim();
+
+  if (platform === 'darwin') {
+    const mods = ['ctrl', 'control', 'alt', 'option', 'shift', 'cmd', 'command', 'meta', 'super'];
+    if (mods.includes(name)) {
+      const mod = name === 'control' ? 'ctrl' : name === 'option' ? 'alt' : ['cmd', 'command', 'meta', 'super'].includes(name) ? 'cmd' : name;
+      await execFileAsync('cliclick', [`kd:${mod}`, `w:${Math.round(duration * 1000)}`, `ku:${mod}`], EXEC_OPTS);
+    } else {
+      const target = KEYCODE_MAC[name] !== undefined ? `key code ${KEYCODE_MAC[name]}` : `"${name.slice(0, 1)}"`;
+      const script = `tell application "System Events"\nkey down ${target}\ndelay ${duration}\nkey up ${target}\nend tell`;
+      await execFileAsync('osascript', ['-e', script], EXEC_OPTS);
+    }
+  } else if (platform === 'linux') {
+    const ds = getDisplayServer();
+    const mapped = KEY_MAP_XDOTOOL[name] ?? name;
+    if (ds === 'wayland') {
+      // Best-effort, matching keyPressYdotool's name-based approach
+      await execFileAsync('ydotool', ['key', `${mapped}:1`], EXEC_OPTS);
+      await new Promise((r) => setTimeout(r, duration * 1000));
+      await execFileAsync('ydotool', ['key', `${mapped}:0`], EXEC_OPTS);
+    } else {
+      await execFileAsync('xdotool', ['keydown', mapped, 'sleep', String(duration), 'keyup', mapped], EXEC_OPTS);
+    }
+  } else if (platform === 'win32') {
+    const known = VK_WIN[name];
+    const vkExpr = known !== undefined
+      ? `0x${known.toString(16)}`
+      : `([KbdOps]::VkKeyScanA([char]'${name.slice(0, 1).replace(/'/g, "''")}') -band 0xFF)`;
+    const script = `
+      Add-Type @"
+        using System;
+        using System.Runtime.InteropServices;
+        public class KbdOps {
+          [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+          [DllImport("user32.dll")] public static extern short VkKeyScanA(char ch);
+        }
+"@
+      $vk = ${vkExpr}
+      [KbdOps]::keybd_event($vk, 0, 0, [UIntPtr]::Zero)
+      Start-Sleep -Milliseconds ${Math.round(duration * 1000)}
+      [KbdOps]::keybd_event($vk, 0, 0x0002, [UIntPtr]::Zero)
+    `;
+    await execFileAsync('powershell', ['-NoProfile', '-Command', script], EXEC_OPTS);
+  }
 }
 
 async function keyPressWindows(parts: string[]): Promise<void> {
@@ -137,7 +214,7 @@ async function keyPressWindows(parts: string[]): Promise<void> {
       ` : ''}
       [WinKey]::keybd_event([WinKey]::VK_LWIN, 0, [WinKey]::KEYEVENTF_KEYUP, [UIntPtr]::Zero)
     `;
-    await execFileAsync('powershell', ['-NoProfile', '-Command', script]);
+    await execFileAsync('powershell', ['-NoProfile', '-Command', script], EXEC_OPTS);
     return;
   }
 
@@ -157,5 +234,5 @@ async function keyPressWindows(parts: string[]): Promise<void> {
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.SendKeys]::SendWait('${sendKeys.replace(/'/g, "''")}')
   `;
-  await execFileAsync('powershell', ['-NoProfile', '-Command', script]);
+  await execFileAsync('powershell', ['-NoProfile', '-Command', script], EXEC_OPTS);
 }
