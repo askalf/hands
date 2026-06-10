@@ -11,6 +11,29 @@ checklist.
 
 ## [Unreleased]
 
+### Fixed — reliability batch (silent failures, hangs, crashes)
+
+- **CLI mode silently lost its screenshot tool on install paths containing spaces.** `mcp-server.js`'s entry-point guard compared `import.meta.url` (percent-encoded, `%20`) against `process.argv[1]` (literal spaces), so under paths like `C:\Program Files\…` the spawned server exited immediately with no visible error. The guard now compares resolved filesystem paths (case-insensitive on Windows).
+- **`hands` crashed on Node 20.0–20.10** — `import.meta.dirname` only exists from Node 20.11, while `engines` allows `>=20.0.0`. Replaced with the `fileURLToPath` pattern.
+- **Ctrl+C inside `hands auth`/`hands init` crashed with an unhandled-rejection stack trace** — `program.parse()` left every async commander action as a floating promise. Now `parseAsync()` with a top-level catch; cancelling a prompt exits quietly with code 130.
+- **`hands audit replay <i> --execute` hung after "Replay complete."** — the confirmation prompt resumed stdin and never paused it, keeping the event loop alive. stdin is paused after the read.
+- **The CLI-mode spinner froze after the first action line** — `update()` never restarted a stopped interval. It does now.
+- **`str_replace` edits could be silently corrupted** when the model's `new_str` contained `$&`/`$$`/`` $` `` — `String.replace` interprets those in string replacements. Switched to a replacer function.
+- **Voice transcription treated partial output + a real error as success** — stderr is now checked for error markers even when stdout is non-empty.
+
+### Security — audit log scrubs recognizable secrets
+
+The audit log records the text the agent types and the commands it runs — when a task involved logging into something, credentials persisted in `~/.hands/audit.jsonl` in plaintext (and survived into the rotated archive and replay tooling). New `src/util/redact.ts` scrubs known token shapes (`sk-ant-…`, GitHub/Slack/AWS tokens, JWTs, `Bearer` headers) and `password=…`-style assignments before audit entries are written. Best-effort by nature — an arbitrary string typed into a password field with no context can't be recognized; documented in-module. Tested in `test/redact.test.mjs`.
+
+### Added — agent-loop integration tests
+
+The SDK-mode agent loop — the code that executes model output — had zero tests; coverage was inverted relative to risk. `runSdkMode` now takes documented test hooks (`testClient`, `testScreen`) so the loop runs against a scripted fake client with `--dry-run` stubbing execution. `test/sdk-loop.test.mjs` pins the request shape (model, `computer-use-2025-11-24` beta, `enable_zoom`, system prompt), the tool_use → tool_result round-trip, the budget halt, and the maxTurns cap.
+
+### Fixed — `find_files` hardening
+
+- Model-supplied grep regexes now run under a 5s wall-clock budget with an honest truncation marker, and single lines are capped at 10k chars before hitting the regex engine — a pathological pattern can no longer wedge the agent's turn (ReDoS).
+- Removed a dead exclude check in the directory walk.
+
 ### Added — full `computer_20251124` action set (zoom, drag, triple-click, hold_key, wait, horizontal scroll, modifier clicks)
 
 The SDK-mode tool declaration promised `computer_20251124`, but the dispatcher implemented only the 2024-10-22 action set — `triple_click`, `hold_key`, `wait`, `left_mouse_down/up`, `left_click_drag`, and `middle_click` all returned "Unknown computer action", and `scroll_direction: left/right` was silently coerced to `down`. The model was burning turns on capabilities that failed at runtime. The dispatcher now implements every documented action:

@@ -224,7 +224,13 @@ auditCmd
 async function readLine(): Promise<string> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
-    process.stdin.once('data', (c) => { chunks.push(c); resolve(Buffer.concat(chunks).toString()); });
+    process.stdin.once('data', (c) => {
+      chunks.push(c);
+      // Pause stdin again or the still-flowing stream keeps the event
+      // loop alive and the process hangs after "Replay complete."
+      process.stdin.pause();
+      resolve(Buffer.concat(chunks).toString());
+    });
   });
 }
 
@@ -271,4 +277,14 @@ program
     }
   });
 
-program.parse();
+// parseAsync, not parse — every action here is async, and plain parse()
+// leaves them as floating promises, so any throw (e.g. inquirer's
+// ExitPromptError when the user hits Ctrl+C inside `hands auth`) became
+// an unhandled-rejection crash with a stack trace.
+program.parseAsync().catch((err: unknown) => {
+  if (err instanceof Error && err.name === 'ExitPromptError') {
+    process.exit(130); // user cancelled an interactive prompt — quiet exit
+  }
+  output.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});
