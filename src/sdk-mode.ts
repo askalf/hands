@@ -39,6 +39,10 @@ export interface SdkModeOptions {
   dryRun?: boolean | undefined;
   /** When set, replaces the default OS-aware system prompt with this exact string. Used by --persona / --system-prompt to swap in custom prompt content. */
   systemPromptOverride?: string | undefined;
+  /** TEST HOOK — fake Anthropic client so the agent loop is testable without an API key. Combine with dryRun + testScreen. */
+  testClient?: { beta: { messages: { create: (req: unknown) => Promise<unknown> } } } | undefined;
+  /** TEST HOOK — fake display so the loop is testable without a screen. */
+  testScreen?: { width: number; height: number; screenshot: () => Promise<{ data: string; mediaType: 'image/png' | 'image/jpeg' }> } | undefined;
 }
 
 export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkModeOptions = {}): Promise<RunResult> {
@@ -46,8 +50,9 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
   // ANTHROPIC_AUTH_TOKEN from the environment itself — that's the
   // documented dario flow (`export ANTHROPIC_API_KEY=dario`), which a
   // previous version broke by always passing config.apiKey explicitly.
-  const client = config.apiKey ? new Anthropic({ apiKey: config.apiKey }) : new Anthropic();
-  const { width: realWidth, height: realHeight } = await getScreenSize();
+  const client = (opts.testClient as unknown as Anthropic)
+    ?? (config.apiKey ? new Anthropic({ apiKey: config.apiKey }) : new Anthropic());
+  const { width: realWidth, height: realHeight } = opts.testScreen ?? await getScreenSize();
   const model = config.model;
   const systemPrompt = opts.systemPromptOverride ?? buildSdkSystemPrompt(normalizePlatform(process.platform));
 
@@ -62,7 +67,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
 
   // Take initial screenshot
   output.action('screenshot', 'Capturing initial screen...');
-  const initialSs = await takeScreenshot();
+  const initialSs = opts.testScreen ? await opts.testScreen.screenshot() : await takeScreenshot();
   const ssMediaType = initialSs.mediaType;
 
   const tools: Anthropic.Beta.BetaTool[] = [

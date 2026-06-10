@@ -25,6 +25,10 @@ checklist.
 
 The audit log records the text the agent types and the commands it runs — when a task involved logging into something, credentials persisted in `~/.hands/audit.jsonl` in plaintext (and survived into the rotated archive and replay tooling). New `src/util/redact.ts` scrubs known token shapes (`sk-ant-…`, GitHub/Slack/AWS tokens, JWTs, `Bearer` headers) and `password=…`-style assignments before audit entries are written. Best-effort by nature — an arbitrary string typed into a password field with no context can't be recognized; documented in-module. Tested in `test/redact.test.mjs`.
 
+### Added — agent-loop integration tests
+
+The SDK-mode agent loop — the code that executes model output — had zero tests; coverage was inverted relative to risk. `runSdkMode` now takes documented test hooks (`testClient`, `testScreen`) so the loop runs against a scripted fake client with `--dry-run` stubbing execution. `test/sdk-loop.test.mjs` pins the request shape (model, `computer-use-2025-11-24` beta, `enable_zoom`, system prompt), the tool_use → tool_result round-trip, the budget halt, and the maxTurns cap.
+
 ### Fixed — `find_files` hardening
 
 - Model-supplied grep regexes now run under a 5s wall-clock budget with an honest truncation marker, and single lines are capped at 10k chars before hitting the regex engine — a pathological pattern can no longer wedge the agent's turn (ReDoS).
