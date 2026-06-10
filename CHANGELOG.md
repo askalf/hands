@@ -23,6 +23,19 @@ The SDK-mode tool declaration promised `computer_20251124`, but the dispatcher i
 
 Also fixed in passing: the macOS scroll implementation used AppleScript verbs that don't exist in System Events (`set position of mouse`, `scroll`) and errored on every call — replaced with cursor positioning + Page Up/Down / arrow-key presses (macOS has no CLI wheel synthesis). Every mouse/keyboard/screenshot adapter call now carries a 15s timeout, so a hung `xdotool`/`cliclick`/`powershell` can no longer stall the agent's turn indefinitely. Action-set parity is pinned in `test/computer-actions.test.mjs` against the documented 2025-11-24 list.
 
+### Fixed — the documented dario-only setup actually works now
+
+The README documented `export ANTHROPIC_BASE_URL=http://localhost:3456` + `export ANTHROPIC_API_KEY=dario` as a zero-config SDK-mode path, but three pieces of code made it impossible: `hands auth` hard-rejected any key not starting with `sk-ant-`, `hands run` exited unless a key was stored in config, and SDK mode passed `config.apiKey` explicitly so the env var was never read. All three fixed:
+
+- `hands auth` accepts non-Anthropic-shaped keys with an informational note (dario and other Anthropic-compatible proxies use arbitrary keys).
+- `hands run` treats `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` in the environment as valid SDK credentials (new pure helper `hasSdkCredentials`, tested).
+- SDK mode constructs the Anthropic client without an explicit key when none is stored, letting the SDK resolve env credentials itself.
+
+### Fixed — routing diagnostics and URL hygiene
+
+- `hands doctor` reported "SDK mode will hit api.anthropic.com directly" whenever `ANTHROPIC_BASE_URL` was unset — but `hands run` auto-detects dario on localhost:3456 and silently routes through it, so the diagnosis was wrong in exactly the case the auto-detect feature creates. Doctor now runs the same probe and reports auto-routing when dario is reachable.
+- The dario auto-detect exported `ANTHROPIC_BASE_URL` untrimmed, so a trailing slash in `HANDS_DARIO_URL` leaked into the SDK's base URL. Normalized before use and export.
+
 ## [0.4.3] - 2026-06-10
 
 Hardening + Windows-reliability release, all from the same internal repo review that produced v0.4.2. Headliners: Claude Login mode actually works on Windows npm installs now (it spawned nothing before), `read_page` refuses private/internal targets, screenshot context no longer grows unbounded, and `~/.hands/config.json` stopped being world-readable. Plus a Windows CI leg so the headline platform stays tested.

@@ -21,6 +21,19 @@ export interface RunOptions {
   overrides?: RunOverrides;
 }
 
+/**
+ * True when SDK mode has a usable credential: a stored key, or an env
+ * key the Anthropic SDK resolves on its own (`ANTHROPIC_API_KEY` /
+ * `ANTHROPIC_AUTH_TOKEN` — the documented dario flow). Pure — exported
+ * for tests.
+ */
+export function hasSdkCredentials(
+  configApiKey: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return Boolean(configApiKey || env['ANTHROPIC_API_KEY'] || env['ANTHROPIC_AUTH_TOKEN']);
+}
+
 export async function run(prompt: string, options: RunOptions = {}): Promise<void> {
   // Auto-detect dario before loading config so SDK initialization picks
   // up the right ANTHROPIC_BASE_URL. Silent fall-through on no-detect;
@@ -75,9 +88,9 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
   // intercept. Force API-key mode for this invocation so dry-run actually
   // holds; fail loudly if no API key.
   if (options.dryRun && config.authMode === 'oauth') {
-    if (!config.apiKey) {
+    if (!hasSdkCredentials(config.apiKey)) {
       output.error('--dry-run only works in SDK mode (API key), and no API key is configured.');
-      output.info('Run `hands auth` to add an API key, or drop --dry-run to use Claude Login mode.');
+      output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment, or drop --dry-run to use Claude Login mode.');
       process.exit(1);
     }
     output.warn('--dry-run only works in SDK mode. Forcing SDK mode for this invocation.');
@@ -88,7 +101,7 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
   if (config.authMode === 'oauth') {
     const hasClaude = await commandExists('claude');
     if (!hasClaude) {
-      if (config.apiKey) {
+      if (hasSdkCredentials(config.apiKey)) {
         output.warn('Claude CLI not found. Falling back to SDK mode (API key).');
         config.authMode = 'api_key';
       } else {
@@ -99,8 +112,8 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
     }
   }
 
-  if (config.authMode === 'api_key' && !config.apiKey) {
-    output.error('No API key configured. Run: hands auth');
+  if (config.authMode === 'api_key' && !hasSdkCredentials(config.apiKey)) {
+    output.error('No API key configured. Run `hands auth`, or set ANTHROPIC_API_KEY in the environment (e.g. for dario routing).');
     process.exit(1);
   }
 

@@ -65,11 +65,14 @@ export async function autoDetectDario(opts: {
     };
   }
 
-  const target = process.env['HANDS_DARIO_URL'] || DEFAULT_DARIO_URL;
+  // Normalize before use AND before export — a trailing slash in
+  // HANDS_DARIO_URL would otherwise leak into ANTHROPIC_BASE_URL and
+  // produce double-slash request paths in the SDK.
+  const target = trimTrailingSlash(process.env['HANDS_DARIO_URL'] || DEFAULT_DARIO_URL);
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   try {
-    const res = await fetchImpl(`${trimTrailingSlash(target)}/health`, {
+    const res = await fetchImpl(`${target}/health`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     if (res.ok) {
