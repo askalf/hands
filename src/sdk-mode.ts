@@ -595,25 +595,38 @@ async function executeComputerActionInner(
   return [{ type: 'text', text: `Unknown tool: ${toolName}` }];
 }
 
-function trimScreenshots(messages: Anthropic.Beta.BetaMessageParam[], keepLast: number): void {
+/**
+ * Replace all but the newest `keepLast` screenshots with a text
+ * placeholder, in place. Screenshots live in two shapes: a top-level
+ * `image` block on the initial user message, and `image` blocks nested
+ * inside `tool_result` content on every later turn — the walk has to
+ * descend into `tool_result` or the per-turn screenshots (the ones that
+ * actually accumulate) are never trimmed. Exported for tests.
+ */
+export function trimScreenshots(messages: Anthropic.Beta.BetaMessageParam[], keepLast: number): void {
   let screenshotCount = 0;
 
-  // Count screenshots from the end
+  const visit = (block: unknown): void => {
+    if (typeof block !== 'object' || block === null || !('type' in block)) return;
+    const mutable = block as Record<string, unknown>;
+    if (mutable['type'] === 'image') {
+      screenshotCount++;
+      if (screenshotCount > keepLast) {
+        mutable['type'] = 'text';
+        mutable['text'] = '[screenshot omitted]';
+        delete mutable['source'];
+      }
+    } else if (mutable['type'] === 'tool_result' && Array.isArray(mutable['content'])) {
+      const nested = mutable['content'] as unknown[];
+      for (let i = nested.length - 1; i >= 0; i--) visit(nested[i]);
+    }
+  };
+
+  // Walk newest-first so the kept screenshots are the most recent ones
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]!;
     if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (typeof block === 'object' && 'type' in block && block.type === 'image') {
-          screenshotCount++;
-          if (screenshotCount > keepLast) {
-            // Replace with placeholder
-            const mutable = block as unknown as Record<string, unknown>;
-            mutable['type'] = 'text';
-            mutable['text'] = '[screenshot omitted]';
-            delete mutable['source'];
-          }
-        }
-      }
+      for (let j = msg.content.length - 1; j >= 0; j--) visit(msg.content[j]);
     }
   }
 }

@@ -1,4 +1,5 @@
 import { loadConfig } from './util/config.js';
+import type { RunOverrides } from './util/cli-overrides.js';
 import { runSdkMode } from './sdk-mode.js';
 import { runCliMode } from './cli-mode.js';
 import { commandExists } from './platform/index.js';
@@ -16,6 +17,8 @@ export interface RunOptions {
   persona?: string;
   /** Path to a system-prompt file. Bypasses persona lookup. SDK mode only. */
   systemPrompt?: string;
+  /** Validated -m/-b/-t values. Applied to the loaded config for this run only — never persisted. */
+  overrides?: RunOverrides;
 }
 
 export async function run(prompt: string, options: RunOptions = {}): Promise<void> {
@@ -63,6 +66,9 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
   }
 
   const config = await loadConfig();
+  if (options.overrides) {
+    Object.assign(config, options.overrides);
+  }
 
   // --dry-run only works in SDK mode. In Claude Login (oauth) mode, `claude`
   // spawns as a child process and dispatches tools itself, so hands can't

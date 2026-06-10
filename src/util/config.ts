@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -39,8 +39,19 @@ export async function loadConfig(): Promise<AgentConfig> {
 export async function saveConfig(config: Partial<AgentConfig>): Promise<AgentConfig> {
   const current = await loadConfig();
   const merged = { ...current, ...config };
-  await mkdir(CONFIG_DIR, { recursive: true });
-  await writeFile(CONFIG_PATH, JSON.stringify(merged, null, 2));
+  // config.json can hold the Anthropic API key — owner-only on POSIX.
+  // `mode` only applies at creation, so also chmod on every save to
+  // repair dirs/files created by versions that didn't set it.
+  await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  await writeFile(CONFIG_PATH, JSON.stringify(merged, null, 2), { mode: 0o600 });
+  if (process.platform !== 'win32') {
+    try {
+      await chmod(CONFIG_DIR, 0o700);
+      await chmod(CONFIG_PATH, 0o600);
+    } catch {
+      // Best-effort — never fail a config save over a perms repair.
+    }
+  }
   return merged;
 }
 
