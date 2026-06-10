@@ -28,6 +28,23 @@ test('checkCommand — hard-blocks Windows root delete', () => {
   assert.equal(out.blocked, true);
 });
 
+test('checkCommand — hard-blocks glob/dot variants of root delete', () => {
+  // `rm -rf /*` empties root just as surely as `rm -rf /` — the
+  // pattern used to require end-or-whitespace right after the slash
+  // and missed these.
+  assert.equal(checkCommand('rm -rf /*').blocked, true);
+  assert.equal(checkCommand('rm -fr /*').blocked, true);
+  assert.equal(checkCommand('rm -rf /.').blocked, true);
+  assert.equal(checkCommand('rm -rf C:\\*').blocked, true);
+  assert.equal(checkCommand('Remove-Item -Recurse -Force C:\\*').blocked, true);
+});
+
+test('checkCommand — scoped deletes under a subdirectory still pass', () => {
+  assert.equal(checkCommand('rm -rf /tmp/build-cache').blocked, false);
+  assert.equal(checkCommand('rm -rf ./dist/*').blocked, false);
+  assert.equal(checkCommand('rm -rf node_modules').blocked, false);
+});
+
 test('checkCommand — hard-blocks disk format', () => {
   const out = checkCommand('format C:');
   assert.equal(out.blocked, true);

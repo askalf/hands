@@ -19,6 +19,7 @@
 //   - Pages > 80KB cleaned — truncated, marker appended.
 
 import { cleanHtml, type StructuredData } from '../util/page-cleanup.js';
+import { assertPublicUrl } from '../util/url-safety.js';
 
 export interface ReadPageResult {
   /** What the tool returns as a string for the agent. */
@@ -52,6 +53,7 @@ export interface ReadPageOptions {
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_REDIRECTS = 5;
 
 /**
  * Fetch + clean a URL. Returns the agent-ready text and audit meta.
@@ -73,17 +75,39 @@ export async function readPage(url: string, opts: ReadPageOptions = {}): Promise
     throw new Error(`Unsupported protocol: ${parsed.protocol}. Only http: and https: are allowed.`);
   }
 
-  const res = await fetch(url, {
-    headers: {
-      'user-agent': opts.userAgent ?? DEFAULT_USER_AGENT,
-      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'accept-language': 'en-US,en;q=0.9',
-    },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-  });
+  // Follow redirects by hand so every hop gets the same SSRF check —
+  // with redirect: 'follow', an external URL could 302 into the
+  // internal network after the initial validation passed.
+  let current = parsed;
+  let res: Response;
+  for (let hop = 0; ; hop++) {
+    await assertPublicUrl(current);
+    res = await fetch(current.href, {
+      headers: {
+        'user-agent': opts.userAgent ?? DEFAULT_USER_AGENT,
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
+      },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    });
+    const location = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && location) {
+      await res.body?.cancel();
+      if (hop >= MAX_REDIRECTS) {
+        throw new Error(`Too many redirects (>${MAX_REDIRECTS}) for ${url}`);
+      }
+      const next = new URL(location, current);
+      if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+        throw new Error(`Redirect to unsupported protocol: ${next.protocol}`);
+      }
+      current = next;
+      continue;
+    }
+    break;
+  }
 
-  const finalUrl = res.url || url;
+  const finalUrl = current.href;
   const contentType = res.headers.get('content-type') || '';
 
   if (!res.ok) {
