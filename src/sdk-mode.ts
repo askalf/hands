@@ -1,8 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getScreenSize } from './platform/screen-info.js';
 import { takeScreenshot } from './platform/screenshot.js';
-import { mouseClick, mouseMove, mouseDoubleClick, mouseScroll } from './platform/mouse.js';
-import { keyboardType, keyboardKey } from './platform/keyboard.js';
+import {
+  mouseClick, mouseMove, mouseDoubleClick, mouseTripleClick, mouseScroll,
+  mouseButtonEvent, mouseDrag,
+  type ScrollDirection, type ModifierKey,
+} from './platform/mouse.js';
+import { keyboardType, keyboardKey, keyboardHoldKey } from './platform/keyboard.js';
 import * as output from './util/output.js';
 import type { AgentConfig } from './util/config.js';
 import { checkCommand } from './util/guardrails.js';
@@ -63,6 +67,9 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
       display_width_px: width,
       display_height_px: height,
       display_number: 1,
+      // Opt into the zoom action (2025-11-24 tool only) — region
+      // captures come back at full resolution via takeScreenshot.
+      enable_zoom: true,
     } as unknown as Anthropic.Beta.BetaTool,
     {
       type: 'bash_20250124' as unknown as 'bash_20241022',
@@ -447,6 +454,39 @@ async function executeFindFiles(
   }
 }
 
+/**
+ * The full computer_20251124 action set. Exported for tests — the
+ * dispatcher must handle every entry (a previous version declared the
+ * 2025-11-24 tool but implemented only the 2024-10-22 actions, so the
+ * model burned turns on capabilities that returned "Unknown action").
+ */
+export const SUPPORTED_COMPUTER_ACTIONS = [
+  'screenshot', 'zoom',
+  'left_click', 'right_click', 'middle_click', 'double_click', 'triple_click',
+  'left_mouse_down', 'left_mouse_up', 'left_click_drag', 'mouse_move',
+  'type', 'key', 'hold_key', 'wait', 'scroll',
+] as const;
+
+/** Validate the computer-use `text` modifier param (shift/ctrl/alt/super). Exported for tests. */
+export function parseModifier(text: unknown): ModifierKey | undefined {
+  return text === 'shift' || text === 'ctrl' || text === 'alt' || text === 'super' ? text : undefined;
+}
+
+/**
+ * Map a zoom `region` [x1, y1, x2, y2] from screenshot space to a real-
+ * pixel [x, y, width, height] capture rect. Exported for tests.
+ */
+export function scaleZoomRegion(
+  region: [number, number, number, number],
+  scaleFactor: number,
+): [number, number, number, number] | undefined {
+  const [x1, y1, x2, y2] = region.map((v) => Math.round(v / scaleFactor)) as [number, number, number, number];
+  const w = x2 - x1;
+  const h = y2 - y1;
+  if (w <= 0 || h <= 0) return undefined;
+  return [x1, y1, w, h];
+}
+
 async function executeComputerActionInner(
   toolName: string,
   input: Record<string, unknown>,
@@ -458,6 +498,8 @@ async function executeComputerActionInner(
   const scaleCoord = (coord: [number, number]): [number, number] =>
     [Math.round(coord[0] / scaleFactor), Math.round(coord[1] / scaleFactor)];
 
+  const verify = 'Use screenshot action to verify if needed.';
+
   if (toolName === 'computer' && action) {
     output.action('computer', action);
 
@@ -466,28 +508,61 @@ async function executeComputerActionInner(
         const ss = await takeScreenshot();
         return [{ type: 'image', source: { type: 'base64', media_type: ss.mediaType, data: ss.data } }];
       }
-      case 'left_click': {
-        const raw = input['coordinate'] as [number, number];
-        const [x, y] = scaleCoord(raw);
-        await mouseClick(x, y, 'left');
+      case 'zoom': {
+        const region = input['region'] as [number, number, number, number] | undefined;
+        if (!Array.isArray(region) || region.length !== 4) {
+          return [{ type: 'text', text: 'Error: zoom requires a region parameter [x1, y1, x2, y2].' }];
+        }
+        const rect = scaleZoomRegion(region, scaleFactor);
+        if (!rect) {
+          return [{ type: 'text', text: 'Error: zoom region is empty — [x1, y1, x2, y2] must describe a positive-area rectangle.' }];
+        }
+        const ss = await takeScreenshot({ region: rect });
         return [
-          { type: 'text', text: `Clicked at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}). Use screenshot action to verify if needed.` },
+          { type: 'text', text: `Zoomed view of region [${region.join(', ')}] at full resolution:` },
+          { type: 'image', source: { type: 'base64', media_type: ss.mediaType, data: ss.data } },
         ];
       }
-      case 'right_click': {
+      case 'left_click':
+      case 'right_click':
+      case 'middle_click': {
         const raw = input['coordinate'] as [number, number];
         const [x, y] = scaleCoord(raw);
-        await mouseClick(x, y, 'right');
+        const button = action === 'right_click' ? 'right' : action === 'middle_click' ? 'middle' : 'left';
+        const modifier = parseModifier(input['text']);
+        await mouseClick(x, y, button, modifier);
+        const modNote = modifier ? ` holding ${modifier}` : '';
         return [
-          { type: 'text', text: `Right-clicked at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}). Use screenshot action to verify if needed.` },
+          { type: 'text', text: `${button === 'left' ? 'Clicked' : button === 'right' ? 'Right-clicked' : 'Middle-clicked'}${modNote} at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}). ${verify}` },
         ];
       }
       case 'double_click': {
         const raw = input['coordinate'] as [number, number];
         const [x, y] = scaleCoord(raw);
         await mouseDoubleClick(x, y);
+        return [{ type: 'text', text: `Double-clicked at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}). ${verify}` }];
+      }
+      case 'triple_click': {
+        const raw = input['coordinate'] as [number, number];
+        const [x, y] = scaleCoord(raw);
+        await mouseTripleClick(x, y);
+        return [{ type: 'text', text: `Triple-clicked at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}). ${verify}` }];
+      }
+      case 'left_mouse_down':
+      case 'left_mouse_up': {
+        const raw = input['coordinate'] as [number, number];
+        const [x, y] = scaleCoord(raw);
+        await mouseButtonEvent(x, y, action === 'left_mouse_down' ? 'down' : 'up');
+        return [{ type: 'text', text: `Left mouse ${action === 'left_mouse_down' ? 'pressed' : 'released'} at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}).` }];
+      }
+      case 'left_click_drag': {
+        const rawStart = input['start_coordinate'] as [number, number];
+        const rawEnd = input['coordinate'] as [number, number];
+        const [sx, sy] = scaleCoord(rawStart);
+        const [ex, ey] = scaleCoord(rawEnd);
+        await mouseDrag(sx, sy, ex, ey);
         return [
-          { type: 'text', text: `Double-clicked at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}). Use screenshot action to verify if needed.` },
+          { type: 'text', text: `Dragged from (${rawStart[0]}, ${rawStart[1]}) to (${rawEnd[0]}, ${rawEnd[1]}) → screen (${sx}, ${sy})→(${ex}, ${ey}). ${verify}` },
         ];
       }
       case 'mouse_move': {
@@ -500,28 +575,42 @@ async function executeComputerActionInner(
         const text = input['text'] as string;
         await keyboardType(text);
         return [
-          { type: 'text', text: `Typed: "${text.length > 50 ? text.slice(0, 50) + '...' : text}". Use screenshot action to verify if needed.` },
+          { type: 'text', text: `Typed: "${text.length > 50 ? text.slice(0, 50) + '...' : text}". ${verify}` },
         ];
       }
       case 'key': {
         const key = input['text'] as string;
         await keyboardKey(key);
-        return [
-          { type: 'text', text: `Pressed: ${key}. Use screenshot action to verify if needed.` },
-        ];
+        return [{ type: 'text', text: `Pressed: ${key}. ${verify}` }];
+      }
+      case 'hold_key': {
+        const key = input['text'] as string;
+        const duration = (input['duration'] as number) ?? 1;
+        await keyboardHoldKey(key, duration);
+        return [{ type: 'text', text: `Held ${key} for ${Math.min(10, Math.max(0.1, duration))}s. ${verify}` }];
+      }
+      case 'wait': {
+        const requested = (input['duration'] as number) ?? 1;
+        const duration = Math.min(30, Math.max(0, requested));
+        await new Promise((r) => setTimeout(r, duration * 1000));
+        return [{ type: 'text', text: `Waited ${duration}s.` }];
       }
       case 'scroll': {
         const raw = input['coordinate'] as [number, number];
         const [x, y] = scaleCoord(raw);
-        const direction = (input['scroll_direction'] as string) === 'up' ? 'up' : 'down' as const;
+        const rawDir = input['scroll_direction'] as string;
+        const direction: ScrollDirection =
+          rawDir === 'up' || rawDir === 'left' || rawDir === 'right' ? rawDir : 'down';
         const amount = (input['scroll_amount'] as number) ?? 3;
-        await mouseScroll(x, y, direction, amount);
+        const modifier = parseModifier(input['text']);
+        await mouseScroll(x, y, direction, amount, modifier);
+        const modNote = modifier ? ` holding ${modifier}` : '';
         return [
-          { type: 'text', text: `Scrolled ${direction} at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}). Use screenshot action to verify if needed.` },
+          { type: 'text', text: `Scrolled ${direction}${modNote} at (${raw[0]}, ${raw[1]}) → screen (${x}, ${y}). ${verify}` },
         ];
       }
       default:
-        return [{ type: 'text', text: `Unknown computer action: ${action}` }];
+        return [{ type: 'text', text: `Unknown computer action: ${action}. Supported: ${SUPPORTED_COMPUTER_ACTIONS.join(', ')}.` }];
     }
   } else if (toolName === 'bash') {
     const command = input['command'] as string;
