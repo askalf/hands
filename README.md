@@ -341,7 +341,7 @@ src/
     output.ts       # chalked stdout helpers
 ```
 
-Six runtime dependencies — `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`, `commander`, `chalk`, `inquirer`, `express`. Resist adding more: the security story rests on the surface staying small enough to audit.
+Six runtime dependencies — `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`, `commander`, `chalk`, `inquirer`, `cheerio`. Resist adding more: the security story rests on the surface staying small enough to audit.
 
 ---
 
@@ -404,7 +404,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 
 | Signal | Status |
 |---|---|
-| **Runtime dependencies** | Six — `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`, `commander`, `chalk`, `inquirer`, `express`. Audited per the security policy. |
+| **Runtime dependencies** | Six — `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`, `commander`, `chalk`, `inquirer`, `cheerio`. Audited per the security policy. |
 | **Credentials** | Stored locally in `~/.hands/config.json`. Dir auto-set to `0700` on POSIX; doctor warns if perms drift. Key material never appears in stdout, error messages, audit log, or doctor output. |
 | **Network scope** | Only your configured LLM endpoint (Anthropic or whatever dario routes to) and, in `voice-setup`, the GitHub mirror that hosts whisper.cpp binaries. No telemetry, no analytics, no phone-home. Verify with `lsof -i` during a run. |
 | **Audit log** | Local-only at `~/.hands/audit.jsonl`. SDK-mode tool invocations only. Rotates at 10 MB; two files total. |
@@ -423,7 +423,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (49 assertions across 5 test files; runs in ~2s).
+Run `npm install && npm run build && npm test` to get a working dev tree (110 tests across 11 test files; runs in ~1s).
 
 ---
 
