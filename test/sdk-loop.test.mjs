@@ -15,6 +15,10 @@ import { runSdkMode } from '../dist/sdk-mode.js';
 const fakeHome = mkdtempSync(join(tmpdir(), 'hands-sdk-loop-'));
 process.env.HOME = fakeHome;
 process.env.USERPROFILE = fakeHome;
+// Silence the loop's console output — heavy stdout from inside a
+// node:test child can corrupt the runner's serialized protocol stream
+// ("Unable to deserialize cloned data") on some Node 22 builds.
+process.env.HANDS_QUIET = '1';
 
 const CONFIG = {
   authMode: 'api_key',
