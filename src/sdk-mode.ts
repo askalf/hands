@@ -12,6 +12,7 @@ import type { AgentConfig } from './util/config.js';
 import { checkCommand } from './util/guardrails.js';
 import { appendAudit } from './util/audit.js';
 import { buildSdkSystemPrompt, normalizePlatform } from './system-prompt.js';
+import { redactSecrets } from './util/redact.js';
 import { readPage } from './tools/read-page.js';
 import { findFiles } from './tools/find-files.js';
 
@@ -307,13 +308,18 @@ function dryRunStub(toolName: string, action: string | undefined, input: Record<
   return `[dry-run] would invoke ${toolName}`;
 }
 
-/** Short, lossy-ok summary of tool args for the audit log. Strips image bytes, truncates long strings. */
+/** Short, lossy-ok summary of tool args for the audit log. Strips image bytes, scrubs recognizable secrets, truncates long strings. */
 export function summarizeToolArgs(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input)) {
     if (k === 'image' || k === 'data' || k === 'source') continue;  // never log base64 image bytes
     if (typeof v === 'string') {
-      out[k] = v.length > 200 ? v.slice(0, 200) + '…' : v;
+      // Scrub before truncating — typed text and bash commands land in
+      // ~/.hands/audit.jsonl, and credentials would otherwise persist
+      // there in plaintext. Best-effort: catches known token shapes,
+      // not arbitrary strings typed into password fields.
+      const scrubbed = redactSecrets(v);
+      out[k] = scrubbed.length > 200 ? scrubbed.slice(0, 200) + '…' : scrubbed;
     } else {
       out[k] = v;
     }
@@ -667,7 +673,10 @@ async function executeComputerActionInner(
         const occurrences = content.split(oldStr).length - 1;
         if (occurrences === 0) return [{ type: 'text', text: `Error: old_str not found in ${path}.` }];
         if (occurrences > 1) return [{ type: 'text', text: `Error: old_str matched ${occurrences} times in ${path}; make it unique (include surrounding context).` }];
-        await fs.writeFile(path, content.replace(oldStr, newStr), 'utf-8');
+        // Replacer function, not a string — model-generated new_str can
+        // contain `$&`/`$$`/`` $` `` patterns that String.replace would
+        // interpret and silently corrupt the edit.
+        await fs.writeFile(path, content.replace(oldStr, () => newStr), 'utf-8');
         return [{ type: 'text', text: `Replaced 1 occurrence in ${path}.` }];
       }
       if (command === 'insert') {

@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import chalk from 'chalk';
@@ -72,7 +73,9 @@ export async function runCliMode(prompt: string, config: AgentConfig, options: C
 
   // Write MCP config pointing to our stdio server
   const mcpConfigPath = join(tmpdir(), `askalf-mcp-${randomBytes(4).toString('hex')}.json`);
-  const mcpServerPath = resolve(import.meta.dirname, 'mcp-server.js');
+  // fileURLToPath instead of import.meta.dirname — the latter only
+  // exists from Node 20.11, while engines allows >=20.0.0.
+  const mcpServerPath = resolve(dirname(fileURLToPath(import.meta.url)), 'mcp-server.js');
 
   const mcpConfig = {
     mcpServers: {
@@ -181,20 +184,30 @@ function createSpinner(label: string) {
   let elapsed = 0;
   const startTime = Date.now();
 
-  const interval = setInterval(() => {
+  const tick = () => {
     elapsed = Math.floor((Date.now() - startTime) / 1000);
     const spinner = chalk.cyan(SPINNER_FRAMES[frame % SPINNER_FRAMES.length]);
     const time = chalk.dim(`${elapsed}s`);
     process.stderr.write(`\r${spinner} ${chalk.white(currentLabel)} ${time}  `);
     frame++;
-  }, 80);
+  };
+
+  let interval: NodeJS.Timeout | null = setInterval(tick, 80);
 
   return {
+    // update() restarts a stopped spinner — the action-line path calls
+    // stop() to print a line, then update() to resume. A previous
+    // version never restarted the interval, so the spinner froze after
+    // the first action for the rest of the task.
     update(newLabel: string) {
       currentLabel = newLabel;
+      if (!interval) interval = setInterval(tick, 80);
     },
     stop() {
-      clearInterval(interval);
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
       process.stderr.write('\r' + ' '.repeat(80) + '\r'); // clear line
     },
   };

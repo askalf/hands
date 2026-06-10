@@ -41,12 +41,13 @@ export async function transcribe(
 
     const durationMs = Date.now() - startTime;
 
-    // Check stderr for errors — don't silently use it as transcript
-    if (!stdout && stderr) {
-      const stderrTrimmed = stderr.trim();
-      if (stderrTrimmed) {
-        throw new Error(`Whisper transcription failed: ${stderrTrimmed.slice(0, 200)}`);
-      }
+    // Check stderr for errors — don't silently use it as transcript.
+    // A partial stdout alongside a real error on stderr is a failure
+    // too (a previous version only failed when stdout was empty, so
+    // truncated transcripts passed as success).
+    const stderrTrimmed = (stderr ?? '').trim();
+    if (stderrTrimmed && (!stdout.trim() || /\b(error|failed)\b/i.test(stderrTrimmed))) {
+      throw new Error(`Whisper transcription failed: ${stderrTrimmed.slice(0, 200)}`);
     }
 
     // Parse output — whisper prints transcript lines to stdout
