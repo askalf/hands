@@ -284,13 +284,36 @@ async function voiceChecks(): Promise<CheckResult[]> {
 async function darioChecks(opts: DoctorOptions): Promise<CheckResult[]> {
   const baseUrl = process.env['ANTHROPIC_BASE_URL'];
   if (!baseUrl) {
+    // Mirror `hands run`'s auto-detect: even with no env var set, run
+    // probes the default dario endpoint and silently routes through it
+    // when reachable. Reporting "will hit api.anthropic.com directly"
+    // here without checking was wrong in exactly the case the
+    // auto-detect feature creates.
+    const target = (process.env['HANDS_DARIO_URL'] || 'http://localhost:3456').replace(/\/$/, '');
+    const fetchImplProbe = opts.fetchImpl ?? fetch;
+    try {
+      const res = await fetchImplProbe(`${target}/health`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        return [
+          {
+            id: 'dario.base-url',
+            category: 'dario',
+            status: 'ok',
+            label: 'routing',
+            detail: `ANTHROPIC_BASE_URL not set, but dario is reachable at ${target} — \`hands run\` will auto-route through it (subscription billing)`,
+          },
+        ];
+      }
+    } catch {
+      // No dario — the common case; fall through to the direct-routing note.
+    }
     return [
       {
         id: 'dario.base-url',
         category: 'dario',
         status: 'info',
         label: 'routing',
-        detail: 'ANTHROPIC_BASE_URL not set — SDK mode will hit api.anthropic.com directly (per-token billing)',
+        detail: `ANTHROPIC_BASE_URL not set and no dario detected at ${target} — SDK mode will hit api.anthropic.com directly (per-token billing)`,
       },
     ];
   }

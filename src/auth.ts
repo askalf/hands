@@ -30,14 +30,22 @@ export async function authInteractive(): Promise<void> {
     const { apiKey } = await inquirer.prompt([{
       type: 'password',
       name: 'apiKey',
-      message: 'Anthropic API key:',
+      message: 'API key (Anthropic sk-ant-…, or your dario/proxy key):',
       mask: '*',
       validate: (input: string) => {
-        if (!input.startsWith('sk-ant-')) return 'API key must start with sk-ant-';
-        if (input.length < 20) return 'API key seems too short';
+        if (input.trim().length < 4) return 'Key seems too short';
         return true;
       },
     }]);
+
+    // Non-Anthropic-shaped keys are legitimate — dario and other
+    // Anthropic-compatible proxies accept arbitrary keys. A previous
+    // version hard-rejected anything not starting with sk-ant-, which
+    // made the documented dario-only setup impossible to complete.
+    if (!apiKey.startsWith('sk-ant-')) {
+      output.warn('Key does not look like an Anthropic API key (sk-ant-…).');
+      output.info('If you are routing through dario or another Anthropic-compatible proxy (ANTHROPIC_BASE_URL), this is expected.');
+    }
 
     await saveConfig({ authMode: 'api_key', apiKey });
     output.success('API key saved. You\'re ready to go!');

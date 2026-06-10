@@ -106,3 +106,15 @@ test('HANDS_DARIO_URL with trailing slash — slash is trimmed before /health is
   assert.equal(probeUrl, 'http://my-server:8080/health');
   clearEnv();
 });
+
+test('HANDS_DARIO_URL with trailing slash — exported ANTHROPIC_BASE_URL is trimmed too', async () => {
+  clearEnv();
+  process.env[HANDS_DARIO_URL_KEY] = 'http://my-server:8080/';
+  const result = await autoDetectDario({
+    fetchImpl: fakeFetch(() => ({ ok: true, status: 200 })),
+  });
+  assert.equal(result.detected, true);
+  assert.equal(result.baseUrl, 'http://my-server:8080');
+  assert.equal(process.env[ENV_KEY], 'http://my-server:8080');
+  clearEnv();
+});

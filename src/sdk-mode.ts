@@ -41,7 +41,11 @@ export interface SdkModeOptions {
 }
 
 export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkModeOptions = {}): Promise<RunResult> {
-  const client = new Anthropic({ apiKey: config.apiKey });
+  // A stored key wins; otherwise let the SDK resolve ANTHROPIC_API_KEY /
+  // ANTHROPIC_AUTH_TOKEN from the environment itself — that's the
+  // documented dario flow (`export ANTHROPIC_API_KEY=dario`), which a
+  // previous version broke by always passing config.apiKey explicitly.
+  const client = config.apiKey ? new Anthropic({ apiKey: config.apiKey }) : new Anthropic();
   const { width: realWidth, height: realHeight } = await getScreenSize();
   const model = config.model;
   const systemPrompt = opts.systemPromptOverride ?? buildSdkSystemPrompt(normalizePlatform(process.platform));

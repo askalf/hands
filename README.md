@@ -196,7 +196,7 @@ hands auth
 
 ### Routing through dario (zero per-token cost in SDK mode)
 
-If you're running [dario](https://github.com/askalf/dario) locally, hands' SDK-mode calls auto-route through it — including the computer-use beta — so they bill against your Claude Max subscription instead of per-token API overage. The Anthropic SDK reads `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` from env by default, so there's no hands-side config:
+If you're running [dario](https://github.com/askalf/dario) locally, hands' SDK-mode calls auto-route through it — including the computer-use beta — so they bill against your Claude Max subscription instead of per-token API overage. When no key is stored in `~/.hands/config.json`, hands defers to the environment — the Anthropic SDK reads `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` itself, so there's no hands-side config. (`hands auth` also accepts non-`sk-ant-` keys with a note, for storing a dario/proxy key directly.)
 
 ```bash
 # in whatever shell starts hands:
