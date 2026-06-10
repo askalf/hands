@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { takeScreenshot } from './platform/screenshot.js';
 import { mouseClick, mouseMove, mouseDoubleClick, mouseScroll } from './platform/mouse.js';
 import { keyboardType, keyboardKey } from './platform/keyboard.js';
+import { checkCommand } from './util/guardrails.js';
 import * as output from './util/output.js';
 
 /**
@@ -162,6 +163,13 @@ export async function replayEntry(entry: AuditEntry, opts: { dryRun: boolean }):
 }
 
 async function runBash(command: string): Promise<void> {
+  // Same gate the live SDK-mode bash tool runs behind — a replayed
+  // command is no less dangerous than a fresh one, and the audit file
+  // is plain JSONL an attacker-influenced process could append to.
+  const guard = checkCommand(command);
+  if (guard.blocked) {
+    throw new Error(`guardrail blocked replay: ${guard.reason}`);
+  }
   return new Promise((resolve, reject) => {
     const isWindows = process.platform === 'win32';
     const shell = isWindows ? 'cmd.exe' : 'bash';

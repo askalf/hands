@@ -121,7 +121,10 @@ program
     console.log(chalk.dim('Model:'), config.model);
     console.log(chalk.dim('Budget:'), `$${config.maxBudgetUsd.toFixed(2)}`);
     console.log(chalk.dim('Max turns:'), config.maxTurns);
-    console.log(chalk.dim('Guardrails:'), chalk.green('active'));
+    // Honest scope: the checkCommand blocklist gates SDK-mode bash
+    // (and audit replay) only. CLI mode delegates tool dispatch to the
+    // claude CLI, where only the prompt-text guardrails travel along.
+    console.log(chalk.dim('Guardrails:'), 'SDK-mode bash blocklist (CLI mode relies on prompt rules + Claude Code)');
   });
 
 program

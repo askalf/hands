@@ -11,6 +11,16 @@ checklist.
 
 ## [Unreleased]
 
+### Security — `read_page` refuses private/internal targets (SSRF guard)
+
+`read_page` fetched any http(s) URL the model asked for, with redirects followed silently — a prompt-injected page could steer the agent into `http://169.254.169.254/…` (cloud metadata) or intranet hosts. New `src/util/url-safety.ts` refuses hostnames/addresses in loopback, private, link-local, CGNAT, and special-use ranges (IPv4 + IPv6, including v4-mapped), checks every address DNS returns, and re-validates on every redirect hop (now followed manually, max 5). Reading internal pages on purpose is still a one-switch override: `HANDS_ALLOW_PRIVATE_URLS=1`. Known limit documented in-module: DNS rebinding between validation and fetch is not closed — that needs IP pinning, out of proportion for a read-only page fetcher.
+
+### Security — guardrail gaps closed
+
+- The root-delete patterns required end-or-whitespace right after the slash, so `rm -rf /` was blocked but `rm -rf /*`, `rm -rf /.`, and `rm -rf C:\*` were not. The patterns now accept a trailing glob/dot. Bypass cases pinned in `test/guardrails.test.mjs`.
+- `hands audit replay <i> --execute` re-ran recorded bash commands without the `checkCommand` gate the live SDK-mode bash tool runs behind. Replay now runs the same gate.
+- `hands check` printed "Guardrails: active" unconditionally — including in CLI mode, which passes `--dangerously-skip-permissions` to the `claude` CLI and never consults `checkCommand`. The line now states the real scope.
+
 ### Fixed — Claude Login mode works on Windows npm installs
 
 `spawn('claude', ...)` fails on Windows when Claude Code is installed via npm (the path this repo's own error message recommends): the install is a `claude.cmd` shim, which `CreateProcess` won't resolve from the bare name and which Node ≥ 20.12.2 refuses to spawn without a shell (CVE-2024-27980). Detection via `where` passed and then the spawn died with a misleading "Claude CLI not found" — reproduced on a real Windows npm install (ENOENT). New resolver `src/platform/claude-cli.ts` finds what the shim wraps — the packaged native `claude.exe` (current claude-code layout) or `cli.js` run through our own node (older layout) — and keeps spawning shell-free, so prompt text is never re-parsed by cmd.exe. Applied to CLI mode, `hands auth`, and `hands doctor` (which now reports a real version instead of `v?` on Windows). Pure resolution core unit-tested in `test/claude-cli.test.mjs`.

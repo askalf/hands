@@ -7,10 +7,12 @@ export interface GuardrailResult {
 
 // Patterns that should NEVER be executed — catastrophic/irreversible
 const HARD_BLOCK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
-  // Filesystem destruction
-  { pattern: /rm\s+(-[a-z]*f[a-z]*\s+)?(-[a-z]*r[a-z]*\s+)?(\/|C:\\)($|\s)/i, reason: 'Recursive delete of root filesystem' },
-  { pattern: /rm\s+(-[a-z]*r[a-z]*\s+)?(-[a-z]*f[a-z]*\s+)?(\/|C:\\)($|\s)/i, reason: 'Recursive delete of root filesystem' },
-  { pattern: /Remove-Item\s+.*(-Recurse|-r)\s.*[\/\\]\s*$/i, reason: 'Recursive delete of root filesystem' },
+  // Filesystem destruction. The root path may be followed by `*` or
+  // `.` (`rm -rf /*` empties root just as surely as `rm -rf /`) —
+  // requiring end-or-whitespace straight after the slash missed those.
+  { pattern: /rm\s+(-[a-z]*f[a-z]*\s+)?(-[a-z]*r[a-z]*\s+)?(\/|C:\\)(\*+|\.)?($|\s)/i, reason: 'Recursive delete of root filesystem' },
+  { pattern: /rm\s+(-[a-z]*r[a-z]*\s+)?(-[a-z]*f[a-z]*\s+)?(\/|C:\\)(\*+|\.)?($|\s)/i, reason: 'Recursive delete of root filesystem' },
+  { pattern: /Remove-Item\s+.*(-Recurse|-r)\s.*[\/\\]\*?\s*$/i, reason: 'Recursive delete of root filesystem' },
   { pattern: /format\s+[a-zA-Z]:/i, reason: 'Format disk drive' },
   { pattern: /diskpart/i, reason: 'Direct disk partition manipulation' },
 
