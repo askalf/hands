@@ -11,6 +11,21 @@ checklist.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-10
+
+Security release. One fix: the SDK-mode text editor no longer shells out, closing a command-injection path. Everything else is dependency maintenance and README accuracy. **If you use SDK mode (API-key auth), upgrade.** Claude Login mode — the default — never touches the affected code path.
+
+PRs in this release: #58 (shell-free file editor + express removal), #60 (commander 13 → 15), #55 (inquirer 13 → 14), #54 / #59 / #64 / #66 (non-major bumps: `@anthropic-ai/sdk`, hono, others), #48 (qs 6.15.2), #49 / #56 / #61 (README only).
+
+### Security — text editor no longer shells out (command-injection path closed)
+
+The `str_replace_based_edit_tool`'s `view` operation ran `cat "<path>"` through a shell with a model-supplied path. A path containing shell metacharacters could inject arbitrary commands — and because the guardrail engine only gates the `bash` tool, the injected command bypassed it entirely. The editor is reimplemented directly on `node:fs` with no shell anywhere in the path, and the previously-stubbed `create` / `str_replace` / `insert` operations now actually work instead of silently no-oping. Found during an internal code audit. (#58)
+
+### Changed
+
+- `express` removed from direct dependencies — nothing in `src` imports it; it was only ever pulled transitively by the MCP SDK. (#58)
+- commander 13 → 15 and inquirer 13 → 14, plus non-major bumps across `@anthropic-ai/sdk`, hono, qs, and fast-uri. No user-facing changes in CLI parsing or interactive prompts; the full test suite passes on both. (#60, #55, #54, #59, #64, #66, #48)
+
 ## [0.4.1] - 2026-05-07
 
 One new agent capability (`find_files`), one gap-closer from v0.4.0 (personas now work in CLI mode, not just SDK mode), and three dependency bumps. All additive — v0.4.0 users see no behavior change without opting into the new tool surface or `--persona` flag.
