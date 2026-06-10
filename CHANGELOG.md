@@ -11,6 +11,12 @@ checklist.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-10
+
+The product release from the 2026-06-10 review, on top of the v0.4.2/v0.4.3 hardening: the computer-use tool now delivers everything it promises the model (full `computer_20251124` action set including zoom at native resolution), the documented dario-only zero-cost setup works end to end, and the SDK agent loop is integration-tested for the first time. Minor-version bump for the new action surface and the relaxed `hands auth` key validation.
+
+PRs in this release: #72 (full computer_20251124 action set), #73 (dario-only auth path + routing diagnostics), #74 (reliability batch, audit secret scrubbing, find_files hardening, agent-loop tests).
+
 ### Fixed — reliability batch (silent failures, hangs, crashes)
 
 - **CLI mode silently lost its screenshot tool on install paths containing spaces.** `mcp-server.js`'s entry-point guard compared `import.meta.url` (percent-encoded, `%20`) against `process.argv[1]` (literal spaces), so under paths like `C:\Program Files\…` the spawned server exited immediately with no visible error. The guard now compares resolved filesystem paths (case-insensitive on Windows).
