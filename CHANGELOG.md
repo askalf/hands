@@ -11,6 +11,12 @@ checklist.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-10
+
+Hardening + Windows-reliability release, all from the same internal repo review that produced v0.4.2. Headliners: Claude Login mode actually works on Windows npm installs now (it spawned nothing before), `read_page` refuses private/internal targets, screenshot context no longer grows unbounded, and `~/.hands/config.json` stopped being world-readable. Plus a Windows CI leg so the headline platform stays tested.
+
+PRs in this release: #68 (screenshot trimming, per-run flag validation, config perms), #69 (Windows `claude.cmd` spawn resolver + `build-windows` CI job), #70 (`read_page` SSRF guard, guardrail gaps, replay gate).
+
 ### Security — `read_page` refuses private/internal targets (SSRF guard)
 
 `read_page` fetched any http(s) URL the model asked for, with redirects followed silently — a prompt-injected page could steer the agent into `http://169.254.169.254/…` (cloud metadata) or intranet hosts. New `src/util/url-safety.ts` refuses hostnames/addresses in loopback, private, link-local, CGNAT, and special-use ranges (IPv4 + IPv6, including v4-mapped), checks every address DNS returns, and re-validates on every redirect hop (now followed manually, max 5). Reading internal pages on purpose is still a one-switch override: `HANDS_ALLOW_PRIVATE_URLS=1`. Known limit documented in-module: DNS rebinding between validation and fetch is not closed — that needs IP pinning, out of proportion for a read-only page fetcher.
