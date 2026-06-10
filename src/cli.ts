@@ -6,6 +6,7 @@ import { initInteractive } from './init.js';
 import { run } from './run.js';
 import { checkPlatform } from './platform/index.js';
 import { loadConfig, saveConfig } from './util/config.js';
+import { parseOverrides } from './util/cli-overrides.js';
 import { isWhisperInstalled, setupWhisper } from './voice/index.js';
 import { runDoctor, renderDoctorText, renderDoctorJson, exitCodeFor } from './doctor.js';
 import * as output from './util/output.js';
@@ -47,22 +48,27 @@ program
   .command('run')
   .description('Run the agent with a natural language prompt')
   .argument('<prompt>', 'What you want the agent to do')
-  .option('-m, --model <model>', 'Model to use')
-  .option('-b, --budget <amount>', 'Max budget in USD')
-  .option('-t, --turns <count>', 'Max turns')
+  .option('-m, --model <model>', 'Model to use (this run only; persist with `hands config --model`)')
+  .option('-b, --budget <amount>', 'Max budget in USD (this run only; persist with `hands config --budget`)')
+  .option('-t, --turns <count>', 'Max turns (this run only; persist with `hands config --turns`)')
   .option('-v, --voice', 'Use voice input (microphone → whisper transcription)')
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
   .option('--persona <name>', 'Use a named persona (bundled: minimal, thorough, concise, security-aware) or ~/.hands/personas/<name>.md. SDK mode only.')
   .option('--system-prompt <path>', 'Path to a system-prompt file. Bypasses --persona. SDK mode only.')
   .action(async (prompt, opts) => {
-    // Apply CLI overrides to config
-    if (opts.model || opts.budget || opts.turns) {
-      const overrides: Record<string, unknown> = {};
-      if (opts.model) overrides['model'] = opts.model;
-      if (opts.budget) overrides['maxBudgetUsd'] = parseFloat(opts.budget);
-      if (opts.turns) overrides['maxTurns'] = parseInt(opts.turns, 10);
-      await saveConfig(overrides);
+    // -m/-b/-t apply to this run only — `hands config` is the
+    // persistence path. (They used to be written straight to
+    // config.json, unvalidated, so `-b abc` persisted a NaN budget
+    // that crashed every later SDK run.)
+    const parsed = parseOverrides({
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
+      ...(opts.turns !== undefined ? { turns: opts.turns } : {}),
+    });
+    if (!parsed.ok) {
+      parsed.errors.forEach((e) => output.error(e));
+      process.exit(1);
     }
 
     await run(prompt, {
@@ -71,6 +77,7 @@ program
       noDario: opts.dario === false,
       ...(opts.persona ? { persona: opts.persona } : {}),
       ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
+      ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
     });
   });
 
@@ -239,10 +246,16 @@ program
   .option('-b, --budget <amount>', 'Default max budget in USD')
   .option('-t, --turns <count>', 'Default max turns')
   .action(async (opts) => {
-    const updates: Record<string, unknown> = {};
-    if (opts.model) updates['model'] = opts.model;
-    if (opts.budget) updates['maxBudgetUsd'] = parseFloat(opts.budget);
-    if (opts.turns) updates['maxTurns'] = parseInt(opts.turns, 10);
+    const parsed = parseOverrides({
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
+      ...(opts.turns !== undefined ? { turns: opts.turns } : {}),
+    });
+    if (!parsed.ok) {
+      parsed.errors.forEach((e) => output.error(e));
+      process.exit(1);
+    }
+    const updates = parsed.overrides;
 
     if (Object.keys(updates).length === 0) {
       const config = await loadConfig();

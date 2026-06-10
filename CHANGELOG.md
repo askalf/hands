@@ -11,6 +11,18 @@ checklist.
 
 ## [Unreleased]
 
+### Fixed — screenshot trimming actually trims now
+
+`trimScreenshots` only matched top-level `image` blocks, but per-turn screenshots come back nested inside `tool_result` content — so nothing was ever trimmed and every screenshot stayed in context for the whole task (up to 50 turns of ~1,500-token images). The walk now descends into `tool_result` blocks; the newest 5 screenshots are kept, older ones become `[screenshot omitted]` placeholders. New tests in `test/trim-screenshots.test.mjs`.
+
+### Fixed — `hands run -m/-b/-t` no longer silently rewrite your saved config
+
+The one-off flags were persisted to `~/.hands/config.json` on every run, unvalidated — `hands run -b abc "..."` wrote `NaN` (serialized as `null`), which crashed every subsequent SDK run until the file was hand-edited. The flags now apply to that run only and are validated up front (positive number for `--budget`, positive integer for `--turns`), with every problem reported in one pass. `hands config` remains the persistence path and gets the same validation. New module `src/util/cli-overrides.ts` with tests.
+
+### Fixed — `~/.hands/config.json` is created owner-only
+
+The config file (which holds the Anthropic API key in API-key mode) was written with default permissions. It's now created `0600` in a `0700` dir, matching what the README already claimed, what `hands doctor` already checks for, and what the audit log already did. Existing installs are repaired on the next config save.
+
 ## [0.4.2] - 2026-06-10
 
 Security release. One fix: the SDK-mode text editor no longer shells out, closing a command-injection path. Everything else is dependency maintenance and README accuracy. **If you use SDK mode (API-key auth), upgrade.** Claude Login mode — the default — never touches the affected code path.
