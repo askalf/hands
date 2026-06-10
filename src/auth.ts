@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { loadConfig, saveConfig } from './util/config.js';
 import { commandExists } from './platform/index.js';
+import { resolveClaudeInvocation } from './platform/claude-cli.js';
 import * as output from './util/output.js';
 
 const execFileAsync = promisify(execFile);
@@ -57,7 +58,8 @@ export async function authInteractive(): Promise<void> {
     } else {
       output.info('Opening browser for Claude login...');
       try {
-        await execFileAsync('claude', ['auth', 'login']);
+        const claude = await resolveClaudeInvocation();
+        await execFileAsync(claude.command, [...claude.prefixArgs, 'auth', 'login']);
         output.success('Claude authentication complete.');
       } catch (err) {
         output.error('Claude auth failed: ' + (err instanceof Error ? err.message : String(err)));
@@ -73,7 +75,8 @@ export async function authInteractive(): Promise<void> {
 
 export async function checkClaudeAuth(): Promise<boolean> {
   try {
-    const { stdout } = await execFileAsync('claude', ['auth', 'status']);
+    const claude = await resolveClaudeInvocation();
+    const { stdout } = await execFileAsync(claude.command, [...claude.prefixArgs, 'auth', 'status']);
     return stdout.toLowerCase().includes('logged in') || stdout.toLowerCase().includes('authenticated');
   } catch {
     return false;

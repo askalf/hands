@@ -9,6 +9,7 @@ import * as output from './util/output.js';
 import type { AgentConfig } from './util/config.js';
 import { VoiceInput } from './voice/index.js';
 import { buildCliSystemPrompt, normalizePlatform, type SupportedPlatform } from './system-prompt.js';
+import { resolveClaudeInvocation } from './platform/claude-cli.js';
 import type { PersonaResolution } from './personas.js';
 
 interface RunResult {
@@ -221,12 +222,14 @@ function buildSessionContext(memory: SessionMemory): string {
   return parts.join('\n');
 }
 
-function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string, memory: SessionMemory, persona: PersonaResolution | undefined): Promise<RunResult> {
+async function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string, memory: SessionMemory, persona: PersonaResolution | undefined): Promise<RunResult> {
+  const invocation = await resolveClaudeInvocation();
   return new Promise((resolvePromise, reject) => {
     const sessionContext = buildSessionContext(memory);
     const systemPrompt = composeCliAppendPrompt(normalizePlatform(process.platform), sessionContext, persona);
 
     const args = [
+      ...invocation.prefixArgs,
       '-p', prompt,
       '--append-system-prompt', systemPrompt,
       '--output-format', 'json',
@@ -235,7 +238,7 @@ function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string,
       '--dangerously-skip-permissions',
     ];
 
-    const child = spawn('claude', args, {
+    const child = spawn(invocation.command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,

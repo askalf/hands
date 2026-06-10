@@ -16,6 +16,7 @@ import { homedir, platform as osPlatform, arch as osArch, release as osRelease }
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkPlatform } from './platform/index.js';
+import { resolveClaudeInvocation } from './platform/claude-cli.js';
 import { isWhisperInstalled } from './voice/index.js';
 import { loadConfig, getConfigDir } from './util/config.js';
 import { commandExists } from './platform/index.js';
@@ -250,7 +251,8 @@ async function claudeCliChecks(): Promise<CheckResult[]> {
   }
   let version = '?';
   try {
-    const { stdout } = await execFileAsync('claude', ['--version']);
+    const claude = await resolveClaudeInvocation();
+    const { stdout } = await execFileAsync(claude.command, [...claude.prefixArgs, '--version']);
     version = stdout.trim().split(/\s+/)[0] ?? '?';
   } catch {
     // leave version as ?

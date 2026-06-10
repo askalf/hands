@@ -11,6 +11,14 @@ checklist.
 
 ## [Unreleased]
 
+### Fixed — Claude Login mode works on Windows npm installs
+
+`spawn('claude', ...)` fails on Windows when Claude Code is installed via npm (the path this repo's own error message recommends): the install is a `claude.cmd` shim, which `CreateProcess` won't resolve from the bare name and which Node ≥ 20.12.2 refuses to spawn without a shell (CVE-2024-27980). Detection via `where` passed and then the spawn died with a misleading "Claude CLI not found" — reproduced on a real Windows npm install (ENOENT). New resolver `src/platform/claude-cli.ts` finds what the shim wraps — the packaged native `claude.exe` (current claude-code layout) or `cli.js` run through our own node (older layout) — and keeps spawning shell-free, so prompt text is never re-parsed by cmd.exe. Applied to CLI mode, `hands auth`, and `hands doctor` (which now reports a real version instead of `v?` on Windows). Pure resolution core unit-tested in `test/claude-cli.test.mjs`.
+
+### Added — Windows CI job
+
+CI ran on Ubuntu only while the README calls Windows 10/11 "best-supported". New `build-windows` job (windows-latest, Node 22) runs the same typecheck / build / test / smoke sequence on every PR. Added as a separate job rather than a matrix axis so the existing `build (20)` / `build (22)` required-check names in branch protection stay stable.
+
 ### Fixed — screenshot trimming actually trims now
 
 `trimScreenshots` only matched top-level `image` blocks, but per-turn screenshots come back nested inside `tool_result` content — so nothing was ever trimmed and every screenshot stayed in context for the whole task (up to 50 turns of ~1,500-token images). The walk now descends into `tool_result` blocks; the newest 5 screenshots are kept, older ones become `[screenshot omitted]` placeholders. New tests in `test/trim-screenshots.test.mjs`.
