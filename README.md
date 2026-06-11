@@ -159,12 +159,14 @@ hands run "open chrome" --voice
         └── SDK / API Key (per-token unless routed through dario)
                 │
                 ├── Anthropic SDK direct (or dario-proxied via ANTHROPIC_BASE_URL)
-                ├── computer_20251124 + bash + text_editor tools
+                ├── computer_20251124 + bash + text_editor + read_page + find_files tools
                 ├── Single-run with cost summary
                 └── Every tool call appended to ~/.hands/audit.jsonl
 ```
 
 The system prompt branches on `process.platform` and ships matching examples for the detected OS. Both modes run the model on the host — hands does not relay, proxy, or upload your screen anywhere except the LLM endpoint you configured.
+
+As of v0.5.0, SDK mode implements the **full `computer_20251124` action set** — including zoom (full-resolution region capture, so small text is actually legible), drag, triple-click, `hold_key`, `wait`, horizontal scroll, and modifier clicks — across all three platforms, with action-set parity pinned in tests.
 
 ---
 
@@ -218,10 +220,18 @@ hands is a high-trust tool: **the agent has shell, keyboard, mouse, and screensh
 ### Threat model
 
 - **Prompt injection.** A web page, an email, a PDF the agent reads can carry instructions Claude wasn't supposed to follow. The agent's bias toward shell over screenshot-click loops *narrows* this surface — typed text from a webpage rarely flows back into a `Start-Process` call — but does not eliminate it. Mitigations: review `--dry-run` before trusting a new task class; keep destructive operations to specific files / folders rather than recursive parents; use `hands run "..."` for one task at a time rather than open-ended sessions on untrusted material.
-- **Lost machine / shoulder-surfed terminal.** API keys live in `~/.hands/config.json` (auto-set to `0700` perms on POSIX). A user who can read that file can issue API calls on your account. `hands auth --status` shows `Mode: API Key (***)` — no key material is emitted in user-facing output (CodeQL `js/clear-text-logging` closed in v0.3.0).
+- **Lost machine / shoulder-surfed terminal.** API keys live in `~/.hands/config.json` (created `0600` in a `0700` dir on POSIX; existing installs are repaired on the next config save). A user who can read that file can issue API calls on your account. `hands auth --status` shows `Mode: API Key (***)` — no key material is emitted in user-facing output (CodeQL `js/clear-text-logging` closed in v0.3.0).
 - **Unaudited Claude Login mode.** The `claude` CLI dispatches tools inside its own process; hands cannot intercept those calls to audit-log them. If you need a full local trail (every shell command, mouse event, screenshot), use SDK mode or `--dry-run`.
 - **Computer-use beta cost.** SDK-mode without dario charges per token *including screenshots* — every screenshot the model takes adds vision tokens. A few-dollar task is plausible at direct API rates. The shell-first system prompt suppresses unnecessary screenshots, but a task that genuinely needs visual verification will spend.
 - **Voice transcription.** whisper.cpp runs entirely local — no audio leaves the machine. Recordings are written to a temp file during transcription and unlinked immediately after. SoX / arecord are invoked via `execFile` with argv arrays (not shell strings) so input filenames can't be injected.
+
+### Recent hardening (v0.4.2 → v0.5.0)
+
+- The SDK-mode text editor no longer shells out — closed a command-injection path where a model-supplied file path could carry shell metacharacters past the guardrail engine (v0.4.2).
+- `read_page` refuses private/internal targets — loopback, RFC-1918, link-local, cloud-metadata ranges — re-validating on every redirect hop (SSRF guard against prompt-injected pages, v0.4.3). Deliberate internal reads: `HANDS_ALLOW_PRIVATE_URLS=1`.
+- Guardrail bypass gaps closed: `rm -rf /*`, `rm -rf /.`, and `rm -rf C:\*` are blocked alongside `rm -rf /`, and `hands audit replay --execute` runs the same `checkCommand` gate as live execution (v0.4.3).
+- The audit log scrubs recognizable secrets (`sk-ant-…`, GitHub/Slack/AWS tokens, JWTs, `Bearer` headers, `password=…` assignments) before entries are written (v0.5.0).
+- Claude Login mode works on Windows npm installs — the `claude.cmd` shim is resolved to the real binary and spawned shell-free, so prompt text is never re-parsed by cmd.exe (v0.4.3).
 
 ### Operating recommendations
 
@@ -256,11 +266,11 @@ These are **system-prompt guardrails, not sandboxing.** They reduce the chance t
 
 Pre-1.0. Honest about what doesn't work yet:
 
-- **Cross-platform LLM behavior is empirical.** v0.3.0 ships OS-aware system prompts (PowerShell / `open` + `osascript` / `xdotool` / `ydotool`) but the actual model behavior under the macOS and Linux blocks is not yet smoke-tested against real Claude calls. Expect the first non-Windows run to surface rough edges in the example commands. Report what didn't work and we'll tune the prompts. Windows is well-exercised.
+- **Cross-platform LLM behavior is empirical.** hands ships OS-aware system prompts (PowerShell / `open` + `osascript` / `xdotool` / `ydotool`; since v0.3.0) but the actual model behavior under the macOS and Linux blocks is not yet smoke-tested against real Claude calls. Expect the first non-Windows run to surface rough edges in the example commands. Report what didn't work and we'll tune the prompts. Windows is well-exercised, and since v0.4.3 the full test suite also runs on `windows-latest` in CI.
 - **Wayland input synthesis is restricted by the protocol.** `xdotool` cannot type into Wayland clients — Wayland blocks input synthesis from arbitrary clients by design. `ydotool` works but requires the `ydotoold` daemon running with appropriate uinput permissions. `hands doctor` reports whether the daemon is reachable.
 - **macOS Accessibility permission on first run.** `osascript -e 'tell application "System Events" to keystroke "..."'` requires Accessibility permission for the parent process. First run will trigger a system prompt; users have to allow it once before keystroke automation works.
 - **Claude Login mode lacks an audit trail.** As covered in the security section — the `claude` CLI doesn't surface tool calls back to hands. Full audit requires SDK mode.
-- **SDK mode is Anthropic-only today.** The computer-use beta (`computer_20251124`) is an Anthropic API; OpenAI / Gemini have no native equivalent. dario routing helps for non-computer-use traffic but does not bridge this. Provider abstraction is a v0.4 candidate, not in v0.3.
+- **SDK mode is Anthropic-only today.** The computer-use beta (`computer_20251124`) is an Anthropic API; OpenAI / Gemini have no native equivalent. dario routing helps for non-computer-use traffic but does not bridge this. Provider abstraction is still on the roadmap; not shipped as of v0.5.0.
 - **`--dry-run` does not prevent every side effect of the planning step.** If the model decides to call a tool that involves an HTTP request as part of "planning what to do," that request still fires (in SDK mode `--dry-run` only stubs the *executor*, not the *model's own reads*). Practically rare; flagging in case it matters.
 - **Voice mode requires SoX (Windows / macOS) or arecord (Linux).** Whisper binary is downloaded by `hands voice-setup`; recording dependency is a separate install — doctor reports it.
 - **No session resume across reboots.** Session memory lives in process; once you exit `hands run`, the conversation is gone. Long multi-day automation is out of scope today.
@@ -299,9 +309,19 @@ hands voice-setup           # download whisper.cpp + speech model for --voice
 hands run "<prompt>"        # interactive computer control session
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
-hands run "<prompt>" -m claude-opus-4-6     # override model
+hands run "<prompt>" -m claude-opus-4-6     # override model (this run only)
 hands run "<prompt>" -b 10.00         # SDK budget cap (USD); default $5.00
 hands run "<prompt>" -t 100           # max turns per task; default 50
+hands run "<prompt>" --persona thorough     # named system-prompt override (SDK mode)
+hands run "<prompt>" --no-dario       # skip the dario auto-detect probe at startup
+```
+
+### Audit
+
+```bash
+hands audit list --last 20  # recent SDK-mode tool calls with replay index
+hands audit show <index>    # full JSON detail for one entry
+hands audit replay <index>  # dry-run replay of one tool call; --execute fires it
 ```
 
 ### Health & diagnostics
@@ -331,13 +351,21 @@ src/
   sdk-mode.ts       # SDK mode: Anthropic SDK, computer-use beta, audit, dry-run
   mcp-server.ts     # MCP server exposing the screenshot tool to the `claude` CLI
   doctor.ts         # health report
+  dario-detect.ts   # localhost:3456 probe + auto-routing at startup
+  personas.ts       # named system-prompt overrides (--persona)
+  audit-replay.ts   # hands audit list / show / replay
   system-prompt.ts  # OS-aware system-prompt builders (win32 / darwin / linux)
-  platform/         # screenshot / mouse / keyboard / screen-info per platform
+  platform/         # screenshot / mouse / keyboard / screen-info per platform + claude CLI resolver
+  tools/            # read_page (fetch + HTML cleanup) and find_files (list / grep in one turn)
   voice/            # whisper setup + audio recorder
   util/
     config.ts       # ~/.hands/config.json load / save / dir creation
     audit.ts        # ~/.hands/audit.jsonl append / read / rotate
     guardrails.ts   # GUARDRAIL_PROMPT + heuristic checkCommand
+    redact.ts       # secret scrubbing before audit entries are written
+    url-safety.ts   # SSRF guard for read_page
+    page-cleanup.ts # HTML cleanup pipeline for read_page
+    cli-overrides.ts# per-run -m / -b / -t validation
     output.ts       # chalked stdout helpers
 ```
 
@@ -388,7 +416,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 
 **macOS osascript prompts for permission on every run.** First run only — once you grant Accessibility permission in System Settings → Privacy & Security → Accessibility for the parent process (your terminal app), subsequent runs reuse it.
 
-**`hands auth --status` shows `Mode: API Key (***)` — where did the partial key go?** v0.3.0 closes a CodeQL `js/clear-text-logging` finding by removing all key substrings from user-facing output (matches dario v3.7.2+). The key is still in `~/.hands/config.json`. Use `cat ~/.hands/config.json` if you need to verify locally.
+**`hands auth --status` shows `Mode: API Key (***)` — where did the partial key go?** Key substrings were removed from all user-facing output in v0.3.0, closing a CodeQL `js/clear-text-logging` finding (matches dario v3.7.2+). The key is still in `~/.hands/config.json`. Use `cat ~/.hands/config.json` if you need to verify locally.
 
 **My SDK-mode session burned $X — was that supposed to happen?** SDK mode without dario routing pays per token at the computer-use beta rates. Screenshots are the largest input-token contributor. Mitigate: (1) route through dario for $0 against Claude Max, (2) prefer Claude Login mode, (3) use `--dry-run` to plan first.
 
@@ -408,7 +436,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 | **Credentials** | Stored locally in `~/.hands/config.json`. Dir auto-set to `0700` on POSIX; doctor warns if perms drift. Key material never appears in stdout, error messages, audit log, or doctor output. |
 | **Network scope** | Only your configured LLM endpoint (Anthropic or whatever dario routes to) and, in `voice-setup`, the GitHub mirror that hosts whisper.cpp binaries. No telemetry, no analytics, no phone-home. Verify with `lsof -i` during a run. |
 | **Audit log** | Local-only at `~/.hands/audit.jsonl`. SDK-mode tool invocations only. Rotates at 10 MB; two files total. |
-| **Code-scanning** | CodeQL runs on every PR + weekly schedule. 0 open alerts as of v0.3.0. |
+| **Code-scanning** | CodeQL runs on every PR + weekly schedule. 0 open alerts as of v0.5.0. |
 | **Branch protection** | `main` requires `actionlint`, `analyze`, `build (20)`, `build (22)` checks; force-push and deletion blocked; conversation resolution required. |
 | **Release attestation** | Every npm publish carries a SLSA provenance attestation generated by GitHub Actions. Verifiable via `npm audit signatures @askalf/hands`. |
 | **Telemetry** | None. |
@@ -423,19 +451,11 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (110 tests across 11 test files; runs in ~1s).
+Run `npm install && npm run build && npm test` to get a working dev tree (157 tests across 19 test files).
 
 ---
 
-## Full Platform
-
-This CLI is a standalone computer-use agent. For the broader askalf workforce — a Docker-Compose stack with 18 specialist agents and an orchestrator working tickets autonomously, a dashboard for supervising them, and LLM routing through dario so you can bring your own Claude Max subscription:
-
-```bash
-curl -fsSL https://get.askalf.org | bash
-```
-
-[askalf.org](https://askalf.org) · [askalf/platform](https://github.com/askalf/platform) · [FLEET.md](https://github.com/askalf/platform/blob/main/docs/FLEET.md)
+hands is part of the [askalf](https://askalf.org) ecosystem — a self-hosted AI workforce platform, now in early access.
 
 ---
 
@@ -465,7 +485,7 @@ MIT
 | [git-providers](https://github.com/askalf/git-providers) | Unified GitHub + GitLab + Bitbucket Cloud REST clients behind one GitProvider interface. Plus a 44-entry api-key-provider taxonomy. |
 | [install-kit](https://github.com/askalf/install-kit) | curl-pipe-bash template for self-hosted Docker apps. |
 | [pgflex](https://github.com/askalf/pgflex) | One Postgres API. Two modes (real PG ↔ PGlite WASM). |
-| [platform](https://github.com/askalf/platform) | The full self-hosted askalf workforce — forge, dashboard, fleet of specialists. |
+| [askalf platform](https://askalf.org) | Self-hosted AI workforce platform — now in early access. |
 | [redisflex](https://github.com/askalf/redisflex) | One Redis API. Two modes (ioredis ↔ in-process). |
 
 
