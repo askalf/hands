@@ -11,6 +11,35 @@ checklist.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-11
+
+Claude Login mode grows up. The default, $0 mode used to run blind: `--dangerously-skip-permissions` with nothing but prompt text for protection, no audit trail ("only SDK mode is covered"), stderr string-scraping for the action display, and "session memory" that was 200-char task summaries re-injected into the system prompt. All four are gone — replaced with the claude CLI's real primitives. Minor-version bump for the new `--continue` flag and audit-log `mode` field.
+
+PRs in this release: #77 (stream-json event feed), #78 (PreToolUse guardrail hook), #79 (session continuity).
+
+### Added — audit trail in Claude Login mode (#77)
+
+The child now runs with `--output-format stream-json` and hands parses the real event feed instead of guessing from stderr noise:
+
+- **Every tool call lands in `~/.hands/audit.jsonl`** — tool, action, redacted args, duration, ok/error — with `mode: 'cli'` so the two run modes are distinguishable (entries without a mode are SDK, which keeps every pre-0.6 line valid). Interrupted calls (no `tool_result` before stream end) are logged as not-ok, since the call may or may not have fired.
+- **Live action lines show what's actually happening** — `→ bash: Start-Process notepad`, `→ askalf-computer: screenshot` — real tool names and arg one-liners from the stream, not `s.includes('tool_use')` heuristics.
+- The stream parser (`src/cli-stream.ts`) is pure and chunk-boundary-safe; unknown event types are ignored by design so future claude stream additions can't break a run.
+
+### Security — the bash hard-block list now *enforces* in Claude Login mode (#78)
+
+CLI mode passes `--dangerously-skip-permissions` to the claude child, and the only protection that traveled with it was prompt text. Claude Code runs PreToolUse hooks even under that flag and respects a deny decision — so hands now injects a settings file wiring `dist/hook-pre-tool-use.js` as a PreToolUse hook on the Bash tool. The same `checkCommand` hard-block list that gates SDK-mode bash denies in CLI mode, blocked attempts are themselves audit-logged (`action: 'guardrail_block'`), and the hook fails open on any malformed input so a hook bug can never take down a host run. Warn-level patterns stay non-blocking, same as SDK mode. `hands check` reports the honest new scope.
+
+### Added — session continuity: real `--resume` + `hands run --continue` (#79)
+
+- Interactive-loop turns pass `--resume <session_id>` (captured from the stream), so "What next?" follow-ups share the actual conversation — full tool results and context, not a summary. The old summary injection survives only as a fallback for streams that never surface a session id.
+- **`hands run --continue` (`-c`) resumes the most recent session across process exits and reboots** — closing the README's long-standing "no session resume" limitation. The pointer lives in `~/.hands/last-session.json` (0600), written after every completed task. Bare `--continue` drops straight into the "What next?" loop; `hands run -c "follow-up"` resumes with a task. The child spawns from the saved cwd (claude scopes session lookup to the starting directory), and impossible combinations (`--continue` + SDK auth / `--dry-run` / no saved session / deleted cwd / missing claude CLI) fail loudly with directed hints.
+
+### Notes
+
+- Claude Login audit coverage is observational (hands records what the stream reports; the child executes the tools), while the PreToolUse hook is enforcement. SDK mode remains the dispatch-site gate it always was.
+- `--dry-run` still forces SDK mode — execution can't be stubbed inside the claude child.
+- 35 new tests (192 total across 22 files), including subprocess tests that invoke the real hook binary the way Claude Code does.
+
 ## [0.5.0] - 2026-06-10
 
 The product release from the 2026-06-10 review, on top of the v0.4.2/v0.4.3 hardening: the computer-use tool now delivers everything it promises the model (full `computer_20251124` action set including zoom at native resolution), the documented dario-only zero-cost setup works end to end, and the SDK agent loop is integration-tested for the first time. Minor-version bump for the new action surface and the relaxed `hands auth` key validation.
