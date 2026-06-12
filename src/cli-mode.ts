@@ -68,6 +68,28 @@ export function composeCliAppendPrompt(
   return sessionContext ? `${persona.prompt}\n\n${sessionContext}` : persona.prompt;
 }
 
+/**
+ * Claude Code settings for the child process: a PreToolUse hook on the
+ * Bash tool that runs hands' hard-block guardrails (dist/hook-pre-tool-use.js).
+ * Hook commands are parsed by a shell, so both paths are double-quoted —
+ * npm global installs land under paths with spaces on every platform
+ * ("Program Files", "Application Support"). Pure — exported for tests.
+ */
+export function buildHookSettings(nodePath: string, hookScriptPath: string): Record<string, unknown> {
+  return {
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            { type: 'command', command: `"${nodePath}" "${hookScriptPath}"` },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 export async function runCliMode(prompt: string, config: AgentConfig, options: CliModeOptions = {}): Promise<RunResult> {
   output.header('AskAlf Agent — Computer Control');
   output.info('Using Claude subscription (no per-token costs)');
@@ -95,6 +117,13 @@ export async function runCliMode(prompt: string, config: AgentConfig, options: C
 
   await writeFile(mcpConfigPath, JSON.stringify(mcpConfig, null, 2));
 
+  // Settings file wiring the guardrail hook into the claude child.
+  // PreToolUse hooks fire even under --dangerously-skip-permissions,
+  // so this is the enforcement layer CLI mode never had.
+  const settingsPath = join(tmpdir(), `askalf-settings-${randomBytes(4).toString('hex')}.json`);
+  const hookScriptPath = resolve(dirname(fileURLToPath(import.meta.url)), 'hook-pre-tool-use.js');
+  await writeFile(settingsPath, JSON.stringify(buildHookSettings(process.execPath, hookScriptPath), null, 2));
+
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -109,7 +138,7 @@ export async function runCliMode(prompt: string, config: AgentConfig, options: C
     while (true) {
       output.info(`\n→ ${currentPrompt}\n`);
 
-      const result = await spawnClaude(currentPrompt, config, mcpConfigPath, sessionMemory, options.persona);
+      const result = await spawnClaude(currentPrompt, config, mcpConfigPath, settingsPath, sessionMemory, options.persona);
       totalTurns += result.turns;
 
       // Record what happened for future turns
@@ -172,6 +201,7 @@ export async function runCliMode(prompt: string, config: AgentConfig, options: C
   } finally {
     rl.close();
     try { await unlink(mcpConfigPath); } catch { /* ignore */ }
+    try { await unlink(settingsPath); } catch { /* ignore */ }
   }
 
   return {
@@ -248,6 +278,8 @@ export interface ClaudeArgsOptions {
   systemPrompt: string;
   maxTurns: number;
   mcpConfigPath: string;
+  /** Settings file carrying the PreToolUse guardrail hook. */
+  settingsPath?: string | undefined;
 }
 
 /**
@@ -269,11 +301,14 @@ export function buildClaudeArgs(o: ClaudeArgsOptions): string[] {
     '--verbose',
     '--max-turns', String(o.maxTurns),
     '--mcp-config', o.mcpConfigPath,
+    ...(o.settingsPath ? ['--settings', o.settingsPath] : []),
+    // Hooks fire (and can deny) even with permissions skipped — the
+    // guardrail hook in settingsPath is what makes this flag safe-ish.
     '--dangerously-skip-permissions',
   ];
 }
 
-async function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string, memory: SessionMemory, persona: PersonaResolution | undefined): Promise<RunResult> {
+async function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string, settingsPath: string, memory: SessionMemory, persona: PersonaResolution | undefined): Promise<RunResult> {
   const invocation = await resolveClaudeInvocation();
   return new Promise((resolvePromise, reject) => {
     const sessionContext = buildSessionContext(memory);
@@ -285,6 +320,7 @@ async function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: s
       systemPrompt,
       maxTurns: config.maxTurns,
       mcpConfigPath,
+      settingsPath,
     });
 
     const child = spawn(invocation.command, args, {

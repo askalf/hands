@@ -55,27 +55,43 @@ const WARN_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /npm\s+uninstall\s+-g/i, reason: 'Uninstalling global npm package' },
 ];
 
+export type GuardrailVerdict =
+  | { blocked: true; reason: string; warnings: string[] }
+  | { blocked: false; warnings: string[] };
+
 /**
- * Check a command against guardrails before execution.
- * Returns { blocked: true, reason } if the command should not run.
+ * Pure decision: hard-block reason or warn reasons for a command.
+ * Writes nothing — the PreToolUse hook calls this and must keep its
+ * stdout clean for the JSON decision Claude Code reads.
  */
-export function checkCommand(command: string): GuardrailResult {
-  // Hard blocks — never allow
+export function evaluateCommand(command: string): GuardrailVerdict {
   for (const { pattern, reason } of HARD_BLOCK_PATTERNS) {
     if (pattern.test(command)) {
-      output.error(`BLOCKED: ${reason}`);
-      output.warn(`Command: ${command.length > 100 ? command.slice(0, 100) + '...' : command}`);
-      return { blocked: true, reason };
+      return { blocked: true, reason, warnings: [] };
     }
   }
-
-  // Warnings — allow but log
+  const warnings: string[] = [];
   for (const { pattern, reason } of WARN_PATTERNS) {
-    if (pattern.test(command)) {
-      output.warn(`CAUTION: ${reason}`);
-    }
+    if (pattern.test(command)) warnings.push(reason);
   }
+  return { blocked: false, warnings };
+}
 
+/**
+ * Check a command against guardrails before execution, printing the
+ * verdict for the operator. Returns { blocked: true, reason } if the
+ * command should not run.
+ */
+export function checkCommand(command: string): GuardrailResult {
+  const verdict = evaluateCommand(command);
+  if (verdict.blocked) {
+    output.error(`BLOCKED: ${verdict.reason}`);
+    output.warn(`Command: ${command.length > 100 ? command.slice(0, 100) + '...' : command}`);
+    return { blocked: true, reason: verdict.reason };
+  }
+  for (const reason of verdict.warnings) {
+    output.warn(`CAUTION: ${reason}`);
+  }
   return { blocked: false };
 }
 

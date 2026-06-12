@@ -121,10 +121,11 @@ program
     console.log(chalk.dim('Model:'), config.model);
     console.log(chalk.dim('Budget:'), `$${config.maxBudgetUsd.toFixed(2)}`);
     console.log(chalk.dim('Max turns:'), config.maxTurns);
-    // Honest scope: the checkCommand blocklist gates SDK-mode bash
-    // (and audit replay) only. CLI mode delegates tool dispatch to the
-    // claude CLI, where only the prompt-text guardrails travel along.
-    console.log(chalk.dim('Guardrails:'), 'SDK-mode bash blocklist (CLI mode relies on prompt rules + Claude Code)');
+    // The checkCommand blocklist gates SDK-mode bash (and audit
+    // replay) at the dispatch site, and CLI-mode bash via a PreToolUse
+    // hook injected into the claude child — hooks fire and can deny
+    // even under --dangerously-skip-permissions.
+    console.log(chalk.dim('Guardrails:'), 'bash hard-block list active in both modes (SDK dispatch gate + CLI PreToolUse hook)');
   });
 
 program
