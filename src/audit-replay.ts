@@ -51,6 +51,39 @@ export interface AuditEntry {
   ok: boolean;
   error?: string;
   dryRun?: boolean;
+  /** Which run mode recorded the entry. Absent = SDK (pre-0.6 entries included). */
+  mode?: 'sdk' | 'cli';
+}
+
+export interface AuditFilter {
+  /** 'cli' = Claude Login entries; 'sdk' = dispatch-site entries (absent mode counts as sdk). */
+  mode?: 'sdk' | 'cli' | undefined;
+  /** Exact tool name (e.g. `bash`, `computer`, `read_page`). */
+  tool?: string | undefined;
+  /** Only entries that did not complete ok. */
+  failedOnly?: boolean | undefined;
+}
+
+export interface IndexedEntry {
+  /** Position in the FULL log — the index `hands audit show/replay` accepts. Filtering must not renumber. */
+  index: number;
+  entry: AuditEntry;
+}
+
+/**
+ * Filter entries while preserving their replay indexes. Pure —
+ * exported for tests.
+ */
+export function filterAuditEntries(entries: AuditEntry[], filter: AuditFilter): IndexedEntry[] {
+  const out: IndexedEntry[] = [];
+  entries.forEach((entry, index) => {
+    if (filter.mode === 'cli' && entry.mode !== 'cli') return;
+    if (filter.mode === 'sdk' && entry.mode === 'cli') return;
+    if (filter.tool && entry.tool !== filter.tool) return;
+    if (filter.failedOnly && entry.ok) return;
+    out.push({ index, entry });
+  });
+  return out;
 }
 
 /** Read the audit log into memory. Returns oldest-first ordering. */
@@ -86,8 +119,10 @@ export function summarizeEntry(entry: AuditEntry): string {
   const action = entry.action ? `:${entry.action}` : '';
   const args = entry.args ? oneLineArgs(entry.args) : '';
   const dry = entry.dryRun ? ' [dry-run]' : '';
+  // CLI-mode marker only — SDK entries keep their historical rendering.
+  const mode = entry.mode === 'cli' ? ' [cli]' : '';
   const duration = entry.durationMs ? ` (${entry.durationMs}ms)` : '';
-  return `${ts}  ${ok}  ${tool}${action}  ${args}${dry}${duration}`;
+  return `${ts}  ${ok}  ${tool}${action}  ${args}${dry}${mode}${duration}`;
 }
 
 function oneLineArgs(args: Record<string, unknown>): string {

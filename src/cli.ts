@@ -179,21 +179,42 @@ auditCmd
   .command('list')
   .description('List recent audit entries with their replay index')
   .option('-n, --last <count>', 'Show the last N entries (default 20)', '20')
+  .option('--mode <mode>', "Filter by run mode: 'cli' (Claude Login) or 'sdk' (entries from before v0.6.0 count as sdk)")
+  .option('--tool <name>', 'Filter by tool name (e.g. bash, computer, read_page)')
+  .option('--failed', 'Only entries that did not complete ok')
+  .option('--json', 'Emit the entries as a JSON array (each with its replay index)')
   .action(async (opts) => {
-    const { readAuditEntries, summarizeEntry } = await import('./audit-replay.js');
+    const { readAuditEntries, summarizeEntry, filterAuditEntries } = await import('./audit-replay.js');
+    if (opts.mode && opts.mode !== 'cli' && opts.mode !== 'sdk') {
+      output.error(`Invalid --mode: ${opts.mode}. Choose 'cli' or 'sdk'.`);
+      process.exit(1);
+    }
     const entries = await readAuditEntries();
-    if (entries.length === 0) {
-      output.info('No audit entries yet. Run `hands run "..."` to record some.');
+    const filtered = filterAuditEntries(entries, {
+      mode: opts.mode,
+      tool: opts.tool,
+      failedOnly: !!opts.failed,
+    });
+    if (filtered.length === 0) {
+      if (opts.json) {
+        console.log('[]');
+        return;
+      }
+      output.info(entries.length === 0
+        ? 'No audit entries yet. Run `hands run "..."` to record some.'
+        : `No entries match the filter (${entries.length} total).`);
       return;
     }
     const n = parseInt(opts.last, 10);
-    const slice = entries.slice(-n);
-    const startIdx = entries.length - slice.length;
-    output.header(`Last ${slice.length} of ${entries.length} entries`);
-    slice.forEach((entry, i) => {
-      const idx = startIdx + i;
-      console.log(`  [${idx}] ${summarizeEntry(entry)}`);
-    });
+    const slice = filtered.slice(-n);
+    if (opts.json) {
+      console.log(JSON.stringify(slice.map(({ index, entry }) => ({ index, ...entry }))));
+      return;
+    }
+    output.header(`Last ${slice.length} of ${filtered.length} matching entries (${entries.length} total)`);
+    for (const { index, entry } of slice) {
+      console.log(`  [${index}] ${summarizeEntry(entry)}`);
+    }
     console.log();
     output.info('Use `hands audit show <index>` for full detail, or `hands audit replay <index>` to re-execute.');
   });
