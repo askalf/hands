@@ -317,6 +317,8 @@ hands voice-setup           # download whisper.cpp + speech model for --voice
 hands run "<prompt>"        # interactive computer control session
 hands run --continue        # resume the most recent session (works after exit/reboot)
 hands run -c "<follow-up>"  # resume and immediately run a follow-up task
+hands run --once "<task>"   # one task, no interactive loop — for scripts and cron
+hands run --json "<task>"   # one JSON result line on stdout (implies --once)
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" -m claude-opus-4-6     # override model (this run only)
@@ -326,10 +328,26 @@ hands run "<prompt>" --persona thorough     # named system-prompt override (SDK 
 hands run "<prompt>" --no-dario       # skip the dario auto-detect probe at startup
 ```
 
+### Scripting & automation
+
+`--once` + `--json` + `-c` turn hands into a composable building block — cron jobs, CI steps, and orchestrators get `spawn → parse → branch` semantics:
+
+```bash
+hands run --once "open the spreadsheet and add June's numbers"
+hands run -c --once "now export it as PDF to ~/reports"   # same conversation, next step
+
+result=$(hands run --json "check if the nightly build passed")
+echo "$result" | jq -r .result
+```
+
+The JSON line is `{ ok, mode, result, turns, costUsd, tokens, sessionId? }` — stable field set, fields get added but never renamed. Failures emit `{ ok: false, error }` so a parser never sees pretty text. Exit codes: `0` task completed, `1` setup/config error, `2` task didn't complete cleanly.
+
 ### Audit
 
 ```bash
 hands audit list --last 20  # recent tool calls (both modes) with replay index
+hands audit list --mode cli --tool bash   # filter: Claude Login bash calls only
+hands audit list --failed --json          # everything that went wrong, as JSON
 hands audit show <index>    # full JSON detail for one entry
 hands audit replay <index>  # dry-run replay of one tool call; --execute fires it
 ```
@@ -464,7 +482,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (192 tests across 22 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (204 tests across 24 test files).
 
 ---
 
