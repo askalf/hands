@@ -53,6 +53,8 @@ program
   .option('-t, --turns <count>', 'Max turns (this run only; persist with `hands config --turns`)')
   .option('-v, --voice', 'Use voice input (microphone → whisper transcription)')
   .option('-c, --continue', 'Resume the most recent Claude Login session — works across exits and reboots')
+  .option('--once', 'Run a single task and exit — no interactive "What next?" loop. For scripts and cron. Exit code 2 if the task did not complete cleanly.')
+  .option('--json', 'Emit one machine-readable JSON object on stdout. Implies --once and silences all decorative output.')
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
   .option('--persona <name>', 'Use a named persona (bundled: minimal, thorough, concise, security-aware) or ~/.hands/personas/<name>.md. SDK mode only.')
@@ -62,6 +64,22 @@ program
       output.error('A prompt is required unless --continue is set.');
       output.info('Usage: hands run "<task>"  ·  hands run --continue  ·  hands run --continue "<follow-up task>"');
       process.exit(1);
+    }
+    const once: boolean = !!(opts.once || opts.json);
+    if (once && !prompt) {
+      // Bare `--continue --once` would have to ask "What next?"
+      // interactively, which defeats the scripting contract.
+      output.error('--once/--json need a prompt: hands run --once "<task>" (add -c to resume the previous session).');
+      process.exit(1);
+    }
+    if (opts.json && opts.voice) {
+      output.error('--json and --voice are mutually exclusive — voice input is interactive by nature.');
+      process.exit(1);
+    }
+    if (opts.json) {
+      // stdout must carry exactly one JSON line; route everything
+      // decorative through the existing quiet mechanism.
+      process.env['HANDS_QUIET'] = '1';
     }
     // -m/-b/-t apply to this run only — `hands config` is the
     // persistence path. (They used to be written straight to
@@ -82,6 +100,8 @@ program
       dryRun: opts.dryRun,
       noDario: opts.dario === false,
       continueSession: opts.continue,
+      once,
+      json: opts.json,
       ...(opts.persona ? { persona: opts.persona } : {}),
       ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
       ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),

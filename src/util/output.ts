@@ -2,10 +2,16 @@ import chalk from 'chalk';
 
 // HANDS_QUIET=1 suppresses all non-error output. Used by the agent-loop
 // tests (heavy stdout from inside node:test child processes can corrupt
-// the runner's serialized protocol stream on some Node versions) and
+// the runner's serialized protocol stream on some Node versions), by
+// `hands run --json` (stdout must carry only the result object), and
 // available to operators who want hands silent in scripts.
 function quiet(): boolean {
   return process.env['HANDS_QUIET'] === '1';
+}
+
+/** Exported for callers that gate non-output.* rendering (e.g. the CLI-mode spinner). */
+export function isQuiet(): boolean {
+  return quiet();
 }
 
 export function info(msg: string): void {
