@@ -19,7 +19,7 @@ import {
 import { appendAudit } from './util/audit.js';
 import { saveLastSession } from './util/session-state.js';
 
-interface RunResult {
+export interface RunResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
@@ -27,6 +27,8 @@ interface RunResult {
   turns: number;
   /** Claude CLI session id, when the stream surfaced one. */
   sessionId?: string | undefined;
+  /** False when the result envelope reported an error subtype (max-turns cutoff, execution error). Absent = unknown, treat as ok. */
+  ok?: boolean | undefined;
 }
 
 interface SessionMemory {
@@ -45,6 +47,8 @@ export interface CliModeOptions {
   persona?: PersonaResolution | undefined;
   /** Resume an existing claude session (`hands run --continue`). The child is spawned from `cwd` because the claude CLI scopes session lookup to the directory the session started in. */
   resume?: { sessionId: string; cwd: string } | undefined;
+  /** Run the initial task and return — no "What next?" loop. The scripting path (`hands run --once` / `--json`). */
+  once?: boolean | undefined;
 }
 
 /**
@@ -99,7 +103,9 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
   if (options.voice) {
     output.info('Voice mode enabled — speak your commands');
   }
-  output.info('Type "exit" or Ctrl+C to quit\n');
+  if (!options.once) {
+    output.info('Type "exit" or Ctrl+C to quit\n');
+  }
 
   const voiceInput = options.voice ? new VoiceInput(config.voice) : null;
 
@@ -221,6 +227,12 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
 
       output.info(`(${result.turns} turns)\n`);
 
+      // Scripting path: one task, no loop. The session pointer was
+      // already saved above, so a follow-up `hands run -c --once` chains.
+      if (options.once) {
+        return result;
+      }
+
       currentPrompt = undefined;
     }
   } catch (err) {
@@ -248,6 +260,11 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 function createSpinner(label: string) {
+  // Quiet mode (--json / HANDS_QUIET=1): stdout must stay clean and
+  // stderr shouldn't carry animation frames into a captured log.
+  if (output.isQuiet()) {
+    return { update(_label: string) { /* no-op */ }, stop() { /* no-op */ } };
+  }
   let frame = 0;
   let currentLabel = label;
   let elapsed = 0;
@@ -454,6 +471,7 @@ async function spawnClaude(prompt: string, config: AgentConfig, opts: SpawnClaud
           costUsd: finalResult.costUsd,
           turns: finalResult.turns,
           sessionId,
+          ok: finalResult.ok,
         });
         return;
       }
@@ -471,6 +489,7 @@ async function spawnClaude(prompt: string, config: AgentConfig, opts: SpawnClaud
         costUsd: 0,
         turns: actionCount,
         sessionId,
+        ok: true, // exit 0 without a result envelope — treat as ok
       });
     });
 

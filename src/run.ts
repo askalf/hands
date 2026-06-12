@@ -21,8 +21,43 @@ export interface RunOptions {
   systemPrompt?: string;
   /** Resume the most recent Claude Login session (`hands run --continue`). The conversation lives in the claude CLI's session store, so this is Claude Login mode only. */
   continueSession?: boolean;
+  /** Run a single task and exit instead of entering the interactive loop. The scripting path; exit code 2 when the task did not complete cleanly. */
+  once?: boolean;
+  /** Emit one machine-readable JSON object on stdout. Implies `once`; caller sets HANDS_QUIET so decorative output is silenced. */
+  json?: boolean;
   /** Validated -m/-b/-t values. Applied to the loaded config for this run only — never persisted. */
   overrides?: RunOverrides;
+}
+
+/** Exit code contract for `hands run --once`: 0 = task completed, 1 = setup/config error, 2 = task did not complete cleanly. */
+export const EXIT_TASK_FAILED = 2;
+
+export interface RunJsonInput {
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  turns: number;
+  sessionId?: string | undefined;
+  ok?: boolean | undefined;
+}
+
+/**
+ * The single JSON line `hands run --json` prints. Stable field set —
+ * scripts parse this; add fields, never rename. Pure — exported for
+ * tests.
+ */
+export function formatRunJson(result: RunJsonInput, mode: 'cli' | 'sdk', dryRun: boolean = false): string {
+  return JSON.stringify({
+    ok: result.ok ?? true,
+    mode,
+    ...(dryRun ? { dryRun: true } : {}),
+    result: result.text,
+    turns: result.turns,
+    costUsd: result.costUsd,
+    tokens: { input: result.inputTokens, output: result.outputTokens },
+    ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+  });
 }
 
 /**
@@ -160,11 +195,20 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
   try {
     if (config.authMode === 'oauth') {
       // CLI mode handles its own interactive loop and output
-      await runCliMode(prompt, config, {
+      const result = await runCliMode(prompt, config, {
         voice: options.voice,
+        once: options.once,
         ...(personaResolution ? { persona: personaResolution } : {}),
         ...(resume ? { resume } : {}),
       });
+      if (options.once) {
+        if (options.json) {
+          console.log(formatRunJson(result, 'cli'));
+        }
+        if (result.ok === false) {
+          process.exitCode = EXIT_TASK_FAILED;
+        }
+      }
     } else {
       if (!prompt) {
         // cli.ts only allows a missing prompt together with --continue,
@@ -176,17 +220,26 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
         dryRun: options.dryRun,
         ...(personaResolution ? { systemPromptOverride: personaResolution.prompt } : {}),
       });
-      if (result.text) {
-        output.header('Result');
-        console.log(result.text);
+      if (options.json) {
+        console.log(formatRunJson(result, 'sdk', !!options.dryRun));
+      } else {
+        if (result.text) {
+          output.header('Result');
+          console.log(result.text);
+        }
+        output.cost(
+          { input: result.inputTokens, output: result.outputTokens },
+          result.costUsd,
+          result.turns,
+        );
       }
-      output.cost(
-        { input: result.inputTokens, output: result.outputTokens },
-        result.costUsd,
-        result.turns,
-      );
     }
   } catch (err) {
+    if (options.json) {
+      // Scripts parse stdout — a failure must still be one JSON line.
+      console.log(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+      process.exit(EXIT_TASK_FAILED);
+    }
     output.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
