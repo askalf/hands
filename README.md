@@ -23,7 +23,7 @@ Hosted computer-use products take four decisions away from you:
 
 **Your shell.** Hosted products simulate clicks and keystrokes via screenshot loops because they don't have your shell. hands has your shell. The agent prefers a one-line `Start-Process` / `open -a` / `xdotool` over a four-screenshot click loop, which is dramatically faster and cheaper.
 
-**Your audit trail.** SDK mode appends every tool call to `~/.hands/audit.jsonl` — timestamps, args, durations, outcomes. `--dry-run` shows what an agent *would* do without doing it. Both work locally; nothing leaves your machine.
+**Your audit trail.** Both run modes append every tool call to `~/.hands/audit.jsonl` — timestamps, args (secrets scrubbed), durations, outcomes. SDK mode logs at the dispatch site; Claude Login mode logs from the claude child's stream-json event feed (since v0.6.0). `--dry-run` shows what an agent *would* do without doing it. All local; nothing leaves your machine.
 
 ## What you stop paying for
 
@@ -36,7 +36,7 @@ Most people reading this already pay Anthropic for Claude Max ($100–200/mo). A
 | SDK mode + direct Anthropic API | **~$0.05–$2 per task** depending on screenshots | ✅ |
 | Hosted "AI does your computer for you" tier | $20–50/mo flat | ❌ |
 
-`hands run` defaults to **Claude Login mode** — the zero-cost path. SDK mode is only invoked when you explicitly choose API Key during `hands auth`, or when `--dry-run` forces it (Claude Login dispatches tools inside the `claude` child process, where hands can't intercept and audit-log them).
+`hands run` defaults to **Claude Login mode** — the zero-cost path. SDK mode is only invoked when you explicitly choose API Key during `hands auth`, or when `--dry-run` forces it (Claude Login executes tools inside the `claude` child process — hands observes and audit-logs them from the event stream, but can't *stub* them, which is what dry-run needs).
 
 ---
 
@@ -149,12 +149,15 @@ hands run "open chrome" --voice
         │
         ├── Claude Login (default, $0/task on Claude Max)
         │       │
-        │       ├── Spawns claude CLI
+        │       ├── Spawns claude CLI (stream-json event feed)
         │       ├── --append-system-prompt (OS-aware computer control agent)
         │       ├── --mcp-config (screenshot tool)
+        │       ├── --settings (PreToolUse hook → bash hard-block list enforced)
         │       ├── Claude uses built-in bash → OS-native shell
         │       │       (PowerShell / open+osascript / xdotool|ydotool)
-        │       └── Interactive loop: task → "What next?" → repeat
+        │       ├── Every tool call → live action line + ~/.hands/audit.jsonl
+        │       └── Interactive loop: task → "What next?" → --resume same session
+        │               (hands run --continue picks it back up after exit/reboot)
         │
         └── SDK / API Key (per-token unless routed through dario)
                 │
@@ -167,6 +170,8 @@ hands run "open chrome" --voice
 The system prompt branches on `process.platform` and ships matching examples for the detected OS. Both modes run the model on the host — hands does not relay, proxy, or upload your screen anywhere except the LLM endpoint you configured.
 
 As of v0.5.0, SDK mode implements the **full `computer_20251124` action set** — including zoom (full-resolution region capture, so small text is actually legible), drag, triple-click, `hold_key`, `wait`, horizontal scroll, and modifier clicks — across all three platforms, with action-set parity pinned in tests.
+
+As of v0.6.0, Claude Login mode parses the claude child's **stream-json event feed**: live action lines show the real tool calls, every call is audit-logged, the bash hard-block list is *enforced* in-child via a PreToolUse hook (it fires even under `--dangerously-skip-permissions`), and follow-up tasks resume the same conversation — including across reboots with `hands run --continue`.
 
 ---
 
@@ -183,7 +188,7 @@ hands auth
 # Select "Claude Login"
 ```
 
-Claude Login mode spawns the `claude` CLI as a child process. It dispatches tool calls itself, which means individual tool invocations are not visible to hands and not written to the audit log. If you need a full local audit trail, use SDK mode (or run with `--dry-run`, which forces SDK).
+Claude Login mode spawns the `claude` CLI as a child process and reads its stream-json event feed — every tool invocation shows up as a live action line and lands in `~/.hands/audit.jsonl` (since v0.6.0). The child executes the tools itself; hands observes and enforces the bash hard-block list via a PreToolUse hook. `--dry-run` still forces SDK mode — execution can't be stubbed inside the child.
 
 ### API Key (fallback)
 
@@ -221,11 +226,14 @@ hands is a high-trust tool: **the agent has shell, keyboard, mouse, and screensh
 
 - **Prompt injection.** A web page, an email, a PDF the agent reads can carry instructions Claude wasn't supposed to follow. The agent's bias toward shell over screenshot-click loops *narrows* this surface — typed text from a webpage rarely flows back into a `Start-Process` call — but does not eliminate it. Mitigations: review `--dry-run` before trusting a new task class; keep destructive operations to specific files / folders rather than recursive parents; use `hands run "..."` for one task at a time rather than open-ended sessions on untrusted material.
 - **Lost machine / shoulder-surfed terminal.** API keys live in `~/.hands/config.json` (created `0600` in a `0700` dir on POSIX; existing installs are repaired on the next config save). A user who can read that file can issue API calls on your account. `hands auth --status` shows `Mode: API Key (***)` — no key material is emitted in user-facing output (CodeQL `js/clear-text-logging` closed in v0.3.0).
-- **Unaudited Claude Login mode.** The `claude` CLI dispatches tools inside its own process; hands cannot intercept those calls to audit-log them. If you need a full local trail (every shell command, mouse event, screenshot), use SDK mode or `--dry-run`.
+- **Claude Login mode is observed, not dispatched.** The `claude` CLI executes tools inside its own process; hands records what the event stream reports (every shell command, file edit, screenshot request) and the PreToolUse hook denies hard-blocked bash commands in-child. The residual gap: a claude-side bug or a future stream format change degrades to *observation loss*, not enforcement loss for SDK mode. For dispatch-site control, use SDK mode or `--dry-run`.
 - **Computer-use beta cost.** SDK-mode without dario charges per token *including screenshots* — every screenshot the model takes adds vision tokens. A few-dollar task is plausible at direct API rates. The shell-first system prompt suppresses unnecessary screenshots, but a task that genuinely needs visual verification will spend.
 - **Voice transcription.** whisper.cpp runs entirely local — no audio leaves the machine. Recordings are written to a temp file during transcription and unlinked immediately after. SoX / arecord are invoked via `execFile` with argv arrays (not shell strings) so input filenames can't be injected.
 
-### Recent hardening (v0.4.2 → v0.5.0)
+### Recent hardening (v0.4.2 → v0.6.0)
+
+- The bash hard-block list is **enforced in Claude Login mode** via a PreToolUse hook injected into the claude child — hooks fire and deny even under `--dangerously-skip-permissions`. Blocked attempts are audit-logged (v0.6.0).
+- Claude Login mode gained a full audit trail from the stream-json event feed; entries carry `mode: 'cli'` and the same secret scrubbing as SDK entries (v0.6.0).
 
 - The SDK-mode text editor no longer shells out — closed a command-injection path where a model-supplied file path could carry shell metacharacters past the guardrail engine (v0.4.2).
 - `read_page` refuses private/internal targets — loopback, RFC-1918, link-local, cloud-metadata ranges — re-validating on every redirect hop (SSRF guard against prompt-injected pages, v0.4.3). Deliberate internal reads: `HANDS_ALLOW_PRIVATE_URLS=1`.
@@ -237,7 +245,7 @@ hands is a high-trust tool: **the agent has shell, keyboard, mouse, and screensh
 
 - **Review `--dry-run` for anything you don't trust by reflex.** SDK-mode `--dry-run` runs the full agent loop with every tool call audit-logged but stubbed — no shell fires, no keys press, no mouse moves. Read `~/.hands/audit.jsonl` after; reopen for real if it looks right.
 - **Keep destructive operations targeted.** `hands run "delete files in ~/Downloads"` is a safer prompt than `hands run "clean up my computer"`. The narrower the scope of the prompt, the narrower the agent's reach for failure modes.
-- **Use SDK mode or `--dry-run` when you need an audit trail.** Claude Login mode is the cheapest path but also the least observable. For sysadmin / high-impact runs, the audit log is worth the per-token cost.
+- **Use `--dry-run` when you want a plan before any execution.** Both modes audit-log every tool call now; what dry-run adds is stubbed execution — the full agent loop with nothing firing on the host. It forces SDK mode (needs an API key or dario).
 - **Don't run hands as root / Administrator.** The agent's shell access is exactly your shell access. Running as root makes `rm -rf /` a one-prompt foot-gun the guardrails won't necessarily catch.
 - **Rotate API keys after suspected exposure.** If your dev machine is compromised or borrowed, treat the API key in `~/.hands/config.json` as exposed. Revoke at [console.anthropic.com](https://console.anthropic.com), then `hands auth` to install the new one.
 - **Review the audit log periodically.** `tail -100 ~/.hands/audit.jsonl` after a session that touched anything important.
@@ -258,7 +266,7 @@ The system prompt also includes hard-block guidance for clearly destructive patt
 - User account creation
 - Ransomware-pattern encryption sweeps
 
-These are **system-prompt guardrails, not sandboxing.** They reduce the chance the model emits a destructive command on its own initiative; they do not prevent a user from explicitly instructing one. The strongest guardrail is your prompt.
+Beyond the prompt guidance, the hard-block patterns above are **enforced** in both modes: SDK mode gates them at the dispatch site, and Claude Login mode denies them in-child via a PreToolUse hook that fires even under `--dangerously-skip-permissions` (v0.6.0). This is still **not sandboxing** — the block list is pattern-based and finite, and a command outside it executes with your full shell access. The strongest guardrail is your prompt.
 
 ---
 
@@ -269,11 +277,11 @@ Pre-1.0. Honest about what doesn't work yet:
 - **Cross-platform LLM behavior is empirical.** hands ships OS-aware system prompts (PowerShell / `open` + `osascript` / `xdotool` / `ydotool`; since v0.3.0) but the actual model behavior under the macOS and Linux blocks is not yet smoke-tested against real Claude calls. Expect the first non-Windows run to surface rough edges in the example commands. Report what didn't work and we'll tune the prompts. Windows is well-exercised, and since v0.4.3 the full test suite also runs on `windows-latest` in CI.
 - **Wayland input synthesis is restricted by the protocol.** `xdotool` cannot type into Wayland clients — Wayland blocks input synthesis from arbitrary clients by design. `ydotool` works but requires the `ydotoold` daemon running with appropriate uinput permissions. `hands doctor` reports whether the daemon is reachable.
 - **macOS Accessibility permission on first run.** `osascript -e 'tell application "System Events" to keystroke "..."'` requires Accessibility permission for the parent process. First run will trigger a system prompt; users have to allow it once before keystroke automation works.
-- **Claude Login mode lacks an audit trail.** As covered in the security section — the `claude` CLI doesn't surface tool calls back to hands. Full audit requires SDK mode.
+- **Claude Login audit coverage is observational.** hands records what the claude child's event stream reports; the child executes the tools. If a future claude version changes the stream format, unknown events are ignored by design — a run keeps working but could under-report until hands catches up. SDK mode logs at the dispatch site and has no such dependency.
 - **SDK mode is Anthropic-only today.** The computer-use beta (`computer_20251124`) is an Anthropic API; OpenAI / Gemini have no native equivalent. dario routing helps for non-computer-use traffic but does not bridge this. Provider abstraction is still on the roadmap; not shipped as of v0.5.0.
 - **`--dry-run` does not prevent every side effect of the planning step.** If the model decides to call a tool that involves an HTTP request as part of "planning what to do," that request still fires (in SDK mode `--dry-run` only stubs the *executor*, not the *model's own reads*). Practically rare; flagging in case it matters.
 - **Voice mode requires SoX (Windows / macOS) or arecord (Linux).** Whisper binary is downloaded by `hands voice-setup`; recording dependency is a separate install — doctor reports it.
-- **No session resume across reboots.** Session memory lives in process; once you exit `hands run`, the conversation is gone. Long multi-day automation is out of scope today.
+- **Session resume is Claude Login mode only.** `hands run --continue` resumes the most recent conversation across exits and reboots (the claude CLI holds the session store). SDK mode is still single-run: exit and the conversation is gone. Also note claude scopes sessions to the directory they started in — hands handles this by saving and reusing the original cwd.
 
 ---
 
@@ -307,6 +315,8 @@ hands voice-setup           # download whisper.cpp + speech model for --voice
 
 ```bash
 hands run "<prompt>"        # interactive computer control session
+hands run --continue        # resume the most recent session (works after exit/reboot)
+hands run -c "<follow-up>"  # resume and immediately run a follow-up task
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" -m claude-opus-4-6     # override model (this run only)
@@ -319,7 +329,7 @@ hands run "<prompt>" --no-dario       # skip the dario auto-detect probe at star
 ### Audit
 
 ```bash
-hands audit list --last 20  # recent SDK-mode tool calls with replay index
+hands audit list --last 20  # recent tool calls (both modes) with replay index
 hands audit show <index>    # full JSON detail for one entry
 hands audit replay <index>  # dry-run replay of one tool call; --execute fires it
 ```
@@ -335,7 +345,7 @@ hands config                # view config
 hands config --model claude-opus-4-6 --turns 100   # update fields
 ```
 
-`hands run --dry-run` is the audit-trail-and-no-side-effects path; useful for first runs against new task classes or for reviewing a model's plan before committing. Forces SDK mode if you're on Claude Login (Claude Login can't be intercepted at the tool level).
+`hands run --dry-run` is the no-side-effects path: the full agent loop with every tool call audit-logged but stubbed. Useful for first runs against new task classes or for reviewing a model's plan before committing. Forces SDK mode if you're on Claude Login (execution can't be stubbed inside the claude child).
 
 ---
 
@@ -347,7 +357,9 @@ src/
   init.ts           # interactive first-run wizard
   auth.ts           # Claude Login / API Key flow
   run.ts            # mode picker (CLI vs SDK), --dry-run gating
-  cli-mode.ts       # Claude Login: spawns `claude` CLI, MCP server, interactive loop
+  cli-mode.ts       # Claude Login: spawns `claude` CLI, MCP server, interactive loop, --resume
+  cli-stream.ts     # stream-json parser: action lines, audit entries, session id
+  hook-pre-tool-use.ts # PreToolUse hook — enforces the bash hard-block list in-child
   sdk-mode.ts       # SDK mode: Anthropic SDK, computer-use beta, audit, dry-run
   mcp-server.ts     # MCP server exposing the screenshot tool to the `claude` CLI
   doctor.ts         # health report
@@ -360,7 +372,8 @@ src/
   voice/            # whisper setup + audio recorder
   util/
     config.ts       # ~/.hands/config.json load / save / dir creation
-    audit.ts        # ~/.hands/audit.jsonl append / read / rotate
+    audit.ts        # ~/.hands/audit.jsonl append / read / rotate (both modes)
+    session-state.ts# ~/.hands/last-session.json — pointer behind `hands run --continue`
     guardrails.ts   # GUARDRAIL_PROMPT + heuristic checkCommand
     redact.ts       # secret scrubbing before audit entries are written
     url-safety.ts   # SSRF guard for read_page
@@ -435,7 +448,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 | **Runtime dependencies** | Six — `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`, `commander`, `chalk`, `inquirer`, `cheerio`. Audited per the security policy. |
 | **Credentials** | Stored locally in `~/.hands/config.json`. Dir auto-set to `0700` on POSIX; doctor warns if perms drift. Key material never appears in stdout, error messages, audit log, or doctor output. |
 | **Network scope** | Only your configured LLM endpoint (Anthropic or whatever dario routes to) and, in `voice-setup`, the GitHub mirror that hosts whisper.cpp binaries. No telemetry, no analytics, no phone-home. Verify with `lsof -i` during a run. |
-| **Audit log** | Local-only at `~/.hands/audit.jsonl`. SDK-mode tool invocations only. Rotates at 10 MB; two files total. |
+| **Audit log** | Local-only at `~/.hands/audit.jsonl`. Both run modes; secrets scrubbed before write. Rotates at 10 MB; two files total. |
 | **Code-scanning** | CodeQL runs on every PR + weekly schedule. 0 open alerts as of v0.5.0. |
 | **Branch protection** | `main` requires `actionlint`, `analyze`, `build (20)`, `build (22)` checks; force-push and deletion blocked; conversation resolution required. |
 | **Release attestation** | Every npm publish carries a SLSA provenance attestation generated by GitHub Actions. Verifiable via `npm audit signatures @askalf/hands`. |
@@ -451,7 +464,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (157 tests across 19 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (192 tests across 22 test files).
 
 ---
 
