@@ -17,6 +17,7 @@ import {
   type StreamEvent, type ResultEvent, type PendingToolCall,
 } from './cli-stream.js';
 import { appendAudit } from './util/audit.js';
+import { saveLastSession } from './util/session-state.js';
 
 interface RunResult {
   text: string;
@@ -42,6 +43,8 @@ export interface CliModeOptions {
   voice?: boolean | undefined;
   /** When set, replaces the default OS-aware system-prompt content with the persona's text. The persona prompt is still appended via `claude --append-system-prompt`, so it stacks on Claude Code's built-in prompt rather than replacing it (CLI mode has no hook to fully replace). Session context (history + lessons) is preserved either way. */
   persona?: PersonaResolution | undefined;
+  /** Resume an existing claude session (`hands run --continue`). The child is spawned from `cwd` because the claude CLI scopes session lookup to the directory the session started in. */
+  resume?: { sessionId: string; cwd: string } | undefined;
 }
 
 /**
@@ -90,7 +93,7 @@ export function buildHookSettings(nodePath: string, hookScriptPath: string): Rec
   };
 }
 
-export async function runCliMode(prompt: string, config: AgentConfig, options: CliModeOptions = {}): Promise<RunResult> {
+export async function runCliMode(prompt: string | undefined, config: AgentConfig, options: CliModeOptions = {}): Promise<RunResult> {
   output.header('AskAlf Agent — Computer Control');
   output.info('Using Claude subscription (no per-token costs)');
   if (options.voice) {
@@ -130,18 +133,74 @@ export async function runCliMode(prompt: string, config: AgentConfig, options: C
   });
 
   let totalTurns = 0;
-  let currentPrompt = prompt;
+  let currentPrompt: string | undefined = prompt;
+  // The claude session we're carrying the conversation in. Seeded by
+  // --continue; otherwise captured from the first task's stream.
+  let activeSessionId: string | undefined = options.resume?.sessionId;
+  const spawnCwd = options.resume?.cwd;
   const sessionMemory: SessionMemory = { history: [], lessons: [] };
 
+  const askNext = async (): Promise<string> => {
+    if (voiceInput) {
+      console.log('\x1b[36m❯ What next?\x1b[0m');
+      try {
+        return await voiceInput.listen();
+      } catch {
+        output.warn('Voice input failed, falling back to keyboard');
+        return new Promise<string>((res) => {
+          rl.question('\x1b[36m❯ What next? (keyboard)\x1b[0m ', (answer) => {
+            res(answer.trim());
+          });
+        });
+      }
+    }
+    return new Promise<string>((res) => {
+      rl.question('\x1b[36m❯ What next?\x1b[0m ', (answer) => {
+        res(answer.trim());
+      });
+    });
+  };
+
   try {
-    // Interactive loop
+    // Interactive loop. `hands run --continue` without a prompt enters
+    // here with currentPrompt undefined and asks first.
     while (true) {
+      if (!currentPrompt) {
+        const next = await askNext();
+        if (!next || next.toLowerCase() === 'exit' || next.toLowerCase() === 'quit') {
+          output.info('Session ended.');
+          break;
+        }
+        currentPrompt = next;
+      }
+
       output.info(`\n→ ${currentPrompt}\n`);
 
-      const result = await spawnClaude(currentPrompt, config, mcpConfigPath, settingsPath, sessionMemory, options.persona);
+      const result = await spawnClaude(currentPrompt, config, {
+        mcpConfigPath,
+        settingsPath,
+        // With a live session id, claude itself holds the real
+        // conversation — the hand-rolled summary injection is only the
+        // fallback for streams that never surfaced an id (old claude
+        // versions, parse failure).
+        memory: activeSessionId ? undefined : sessionMemory,
+        persona: options.persona,
+        resumeSessionId: activeSessionId,
+        cwd: spawnCwd,
+      });
       totalTurns += result.turns;
 
-      // Record what happened for future turns
+      if (result.sessionId) {
+        activeSessionId = result.sessionId;
+        void saveLastSession({
+          sessionId: result.sessionId,
+          cwd: spawnCwd ?? process.cwd(),
+          task: currentPrompt,
+          ts: Date.now(),
+        });
+      }
+
+      // Record what happened — only consulted on the fallback path.
       sessionMemory.history.push({
         task: currentPrompt,
         result: result.text.slice(0, 200),
@@ -162,34 +221,7 @@ export async function runCliMode(prompt: string, config: AgentConfig, options: C
 
       output.info(`(${result.turns} turns)\n`);
 
-      // Prompt for next task
-      let next: string;
-      if (voiceInput) {
-        console.log('\x1b[36m❯ What next?\x1b[0m');
-        try {
-          next = await voiceInput.listen();
-        } catch {
-          output.warn('Voice input failed, falling back to keyboard');
-          next = await new Promise<string>((res) => {
-            rl.question('\x1b[36m❯ What next? (keyboard)\x1b[0m ', (answer) => {
-              res(answer.trim());
-            });
-          });
-        }
-      } else {
-        next = await new Promise<string>((res) => {
-          rl.question('\x1b[36m❯ What next?\x1b[0m ', (answer) => {
-            res(answer.trim());
-          });
-        });
-      }
-
-      if (!next || next.toLowerCase() === 'exit' || next.toLowerCase() === 'quit') {
-        output.info('Session ended.');
-        break;
-      }
-
-      currentPrompt = next;
+      currentPrompt = undefined;
     }
   } catch (err) {
     // Handle Ctrl+C gracefully
@@ -280,6 +312,8 @@ export interface ClaudeArgsOptions {
   mcpConfigPath: string;
   /** Settings file carrying the PreToolUse guardrail hook. */
   settingsPath?: string | undefined;
+  /** Continue an existing claude session instead of starting fresh. */
+  resumeSessionId?: string | undefined;
 }
 
 /**
@@ -290,6 +324,10 @@ export interface ClaudeArgsOptions {
 export function buildClaudeArgs(o: ClaudeArgsOptions): string[] {
   return [
     ...o.prefixArgs,
+    // --resume must ride along with every other flag re-passed: the
+    // claude CLI does not persist --append-system-prompt, --mcp-config,
+    // or permission flags across resumes.
+    ...(o.resumeSessionId ? ['--resume', o.resumeSessionId] : []),
     '-p', o.prompt,
     '--append-system-prompt', o.systemPrompt,
     // stream-json (not json): we want the live event feed — real
@@ -308,23 +346,36 @@ export function buildClaudeArgs(o: ClaudeArgsOptions): string[] {
   ];
 }
 
-async function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string, settingsPath: string, memory: SessionMemory, persona: PersonaResolution | undefined): Promise<RunResult> {
+interface SpawnClaudeOptions {
+  mcpConfigPath: string;
+  settingsPath: string;
+  /** Session-summary fallback — omitted when a real claude session carries the conversation. */
+  memory?: SessionMemory | undefined;
+  persona?: PersonaResolution | undefined;
+  resumeSessionId?: string | undefined;
+  /** Spawn directory override — claude scopes session lookup to the dir a session started in. */
+  cwd?: string | undefined;
+}
+
+async function spawnClaude(prompt: string, config: AgentConfig, opts: SpawnClaudeOptions): Promise<RunResult> {
   const invocation = await resolveClaudeInvocation();
   return new Promise((resolvePromise, reject) => {
-    const sessionContext = buildSessionContext(memory);
-    const systemPrompt = composeCliAppendPrompt(normalizePlatform(process.platform), sessionContext, persona);
+    const sessionContext = opts.memory ? buildSessionContext(opts.memory) : '';
+    const systemPrompt = composeCliAppendPrompt(normalizePlatform(process.platform), sessionContext, opts.persona);
 
     const args = buildClaudeArgs({
       prefixArgs: invocation.prefixArgs,
       prompt,
       systemPrompt,
       maxTurns: config.maxTurns,
-      mcpConfigPath,
-      settingsPath,
+      mcpConfigPath: opts.mcpConfigPath,
+      settingsPath: opts.settingsPath,
+      resumeSessionId: opts.resumeSessionId,
     });
 
     const child = spawn(invocation.command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
       env: {
         ...process.env,
         CLAUDECODE: '',
