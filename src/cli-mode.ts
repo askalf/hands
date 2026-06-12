@@ -12,6 +12,11 @@ import { VoiceInput } from './voice/index.js';
 import { buildCliSystemPrompt, normalizePlatform, type SupportedPlatform } from './system-prompt.js';
 import { resolveClaudeInvocation } from './platform/claude-cli.js';
 import type { PersonaResolution } from './personas.js';
+import {
+  StreamJsonParser, pendingToolCall, auditEntryFor, flushPendingAudits,
+  type StreamEvent, type ResultEvent, type PendingToolCall,
+} from './cli-stream.js';
+import { appendAudit } from './util/audit.js';
 
 interface RunResult {
   text: string;
@@ -19,6 +24,8 @@ interface RunResult {
   outputTokens: number;
   costUsd: number;
   turns: number;
+  /** Claude CLI session id, when the stream surfaced one. */
+  sessionId?: string | undefined;
 }
 
 interface SessionMemory {
@@ -235,21 +242,50 @@ function buildSessionContext(memory: SessionMemory): string {
   return parts.join('\n');
 }
 
+export interface ClaudeArgsOptions {
+  prefixArgs: string[];
+  prompt: string;
+  systemPrompt: string;
+  maxTurns: number;
+  mcpConfigPath: string;
+}
+
+/**
+ * Argv for the `claude` child. Pure — exported for tests so the flag
+ * contract (stream-json + verbose + skip-permissions ordering) is
+ * pinned without spawning anything.
+ */
+export function buildClaudeArgs(o: ClaudeArgsOptions): string[] {
+  return [
+    ...o.prefixArgs,
+    '-p', o.prompt,
+    '--append-system-prompt', o.systemPrompt,
+    // stream-json (not json): we want the live event feed — real
+    // tool_use blocks for action lines and the audit log, plus the
+    // session id — instead of one opaque envelope at exit.
+    '--output-format', 'stream-json',
+    // Older claude versions rejected stream-json in print mode without
+    // --verbose; current ones accept it either way. Always pass it.
+    '--verbose',
+    '--max-turns', String(o.maxTurns),
+    '--mcp-config', o.mcpConfigPath,
+    '--dangerously-skip-permissions',
+  ];
+}
+
 async function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: string, memory: SessionMemory, persona: PersonaResolution | undefined): Promise<RunResult> {
   const invocation = await resolveClaudeInvocation();
   return new Promise((resolvePromise, reject) => {
     const sessionContext = buildSessionContext(memory);
     const systemPrompt = composeCliAppendPrompt(normalizePlatform(process.platform), sessionContext, persona);
 
-    const args = [
-      ...invocation.prefixArgs,
-      '-p', prompt,
-      '--append-system-prompt', systemPrompt,
-      '--output-format', 'json',
-      '--max-turns', String(config.maxTurns),
-      '--mcp-config', mcpConfigPath,
-      '--dangerously-skip-permissions',
-    ];
+    const args = buildClaudeArgs({
+      prefixArgs: invocation.prefixArgs,
+      prompt,
+      systemPrompt,
+      maxTurns: config.maxTurns,
+      mcpConfigPath,
+    });
 
     const child = spawn(invocation.command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -260,69 +296,95 @@ async function spawnClaude(prompt: string, config: AgentConfig, mcpConfigPath: s
     });
 
     const spinner = createSpinner('Thinking...');
-    let stdout = '';
+    const parser = new StreamJsonParser();
+    const pending = new Map<string, PendingToolCall>();
+    let sessionId: string | undefined;
+    let finalResult: ResultEvent | undefined;
+    let lastAssistantText = '';
     let actionCount = 0;
+    let stderrTail = '';
+    // Audit writes are chained so entries land in stream order even
+    // though each append is async. Never awaited on the hot path — the
+    // audit log is diagnostic, not authoritative.
+    let auditChain: Promise<void> = Promise.resolve();
+
+    const handleEvent = (event: StreamEvent): void => {
+      switch (event.kind) {
+        case 'init':
+          sessionId = event.sessionId;
+          break;
+        case 'tool_use': {
+          actionCount++;
+          const call = pendingToolCall(event, Date.now());
+          if (event.id) pending.set(event.id, call);
+          spinner.stop();
+          output.action('→', call.summary);
+          spinner.update(`Working... (action ${actionCount})`);
+          break;
+        }
+        case 'tool_result': {
+          const call = pending.get(event.toolUseId);
+          if (call) {
+            pending.delete(event.toolUseId);
+            const entry = auditEntryFor(call, event.isError, Date.now());
+            auditChain = auditChain.then(() => appendAudit(entry));
+          }
+          break;
+        }
+        case 'text':
+          lastAssistantText = event.text;
+          break;
+        case 'result':
+          finalResult = event;
+          if (event.sessionId) sessionId = event.sessionId;
+          break;
+      }
+    };
 
     child.stdout.on('data', (data: Buffer) => {
-      stdout += data.toString();
+      for (const event of parser.push(data.toString())) handleEvent(event);
     });
 
+    // stderr is --verbose progress noise; keep a short tail purely for
+    // the error message when the child dies without a result event.
     child.stderr.on('data', (data: Buffer) => {
-      const line = data.toString().trim();
-      if (!line) return;
-      for (const segment of line.split('\n')) {
-        const s = segment.trim();
-        if (!s) continue;
-
-        // Detect tool use and update spinner with action context
-        if (s.includes('tool_use') || s.includes('askalf-computer')) {
-          actionCount++;
-          if (s.includes('screenshot')) {
-            spinner.update('Taking screenshot...');
-          } else if (s.includes('Bash') || s.includes('bash') || s.includes('powershell')) {
-            spinner.update('Running command...');
-          } else {
-            spinner.update(`Working... (action ${actionCount})`);
-          }
-        }
-
-        // Show meaningful actions on their own line
-        if (s.includes('screenshot') || s.includes('mouse') || s.includes('keyboard') ||
-            s.includes('click') || s.includes('type') || s.includes('scroll') ||
-            s.includes('tool_use') || s.includes('askalf-computer')) {
-          spinner.stop();
-          output.action('→', s.length > 120 ? s.slice(0, 120) + '...' : s);
-          spinner.update(`Working... (action ${actionCount})`);
-        }
-      }
+      stderrTail = (stderrTail + data.toString()).slice(-500);
     });
 
     child.on('close', (code) => {
+      for (const event of parser.flush()) handleEvent(event);
       spinner.stop();
 
-      if (code !== 0 && !stdout) {
-        reject(new Error(`Claude exited with code ${code}`));
+      for (const entry of flushPendingAudits(pending.values(), Date.now())) {
+        auditChain = auditChain.then(() => appendAudit(entry));
+      }
+
+      if (finalResult) {
+        resolvePromise({
+          text: finalResult.text || lastAssistantText,
+          inputTokens: finalResult.inputTokens,
+          outputTokens: finalResult.outputTokens,
+          costUsd: finalResult.costUsd,
+          turns: finalResult.turns,
+          sessionId,
+        });
         return;
       }
 
-      try {
-        const parsed = JSON.parse(stdout);
-        resolvePromise({
-          text: parsed.result ?? parsed.content ?? '',
-          inputTokens: parsed.usage?.input_tokens ?? parsed.input_tokens ?? 0,
-          outputTokens: parsed.usage?.output_tokens ?? parsed.output_tokens ?? 0,
-          costUsd: parsed.total_cost_usd ?? parsed.cost_usd ?? 0,
-          turns: parsed.num_turns ?? 0,
-        });
-      } catch {
-        resolvePromise({
-          text: stdout.slice(0, 500) || 'Done',
-          inputTokens: 0,
-          outputTokens: 0,
-          costUsd: 0,
-          turns: 0,
-        });
+      if (code !== 0) {
+        const detail = stderrTail.trim().split('\n').pop();
+        reject(new Error(`Claude exited with code ${code}${detail ? `: ${detail}` : ''}`));
+        return;
       }
+
+      resolvePromise({
+        text: lastAssistantText || 'Done',
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        turns: actionCount,
+        sessionId,
+      });
     });
 
     child.on('error', (err) => {

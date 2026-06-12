@@ -5,9 +5,12 @@
 // (disk full, permission change, etc.) we log to stderr and continue —
 // the audit log is diagnostic, not authoritative.
 //
-// Only SDK mode is covered. Claude Login mode spawns the `claude` child
-// process and delegates tool execution there, so those actions are
-// outside hands's scope to log.
+// Both run modes are covered. SDK mode logs at the dispatch site (it
+// executes the tools itself). Claude Login mode logs from the
+// stream-json event feed of the `claude` child process — hands observes
+// every tool_use/tool_result pair even though the child executes them.
+// CLI-mode entries carry `mode: 'cli'`; entries without a mode are SDK
+// (including everything written before v0.6.0).
 //
 // Rotation is simple: when the live file crosses `MAX_BYTES`, it's moved
 // to `audit.jsonl.old` (overwriting any prior archive) and a fresh empty
@@ -39,6 +42,8 @@ export interface AuditEntry {
   error?: string | undefined;
   /** True when this call was suppressed by --dry-run. */
   dryRun?: boolean | undefined;
+  /** Which run mode recorded the entry. Absent = SDK (pre-0.6 entries included). */
+  mode?: 'sdk' | 'cli' | undefined;
 }
 
 /**
