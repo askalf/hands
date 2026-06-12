@@ -11,6 +11,22 @@ checklist.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-12
+
+hands becomes scriptable. v0.6.0 gave Claude Login mode real sessions, audit, and guardrails; v0.7.0 exposes that machinery to scripts, cron jobs, and orchestrators — `hands run` no longer has to end in an interactive prompt, and the now-dual-mode audit log is queryable. Minor-version bump for the new flags.
+
+PRs in this release: #81 (one-shot scripting mode), #82 (audit list filters).
+
+### Added — one-shot scripting mode: `--once`, `--json`, exit-code contract (#81)
+
+- **`hands run --once "<task>"`** runs a single task and exits — no "What next?" loop. The session pointer is saved before returning, so `hands run -c --once "<next step>"` chains multi-step automation across invocations (and reboots).
+- **`hands run --json "<task>"`** (implies `--once`) emits exactly one machine-readable JSON line on stdout: `{ ok, mode, result, turns, costUsd, tokens: {input, output}, sessionId? }`. Decorative output is silenced (the spinner included), and failures still emit one JSON line (`{ ok: false, error }`) — a parsing script never sees pretty text. The field set is stable: fields get added, never renamed. SDK mode honors `--json` too, with a `dryRun: true` marker when `--dry-run` forced it.
+- **Exit codes**, pinned in tests: `0` task completed, `1` setup/config error, `2` task did not complete cleanly (max-turns cutoff or execution error, surfaced from the stream's result envelope).
+
+### Added — audit list filters: `--mode`, `--tool`, `--failed`, `--json` (#82)
+
+`hands audit list` can now answer "what did Claude Login bash do?" (`--mode cli --tool bash`) and "what went wrong?" (`--failed` — including guardrail blocks) and emit the result as JSON. Filtering never renumbers: printed indexes stay positions in the full log, because they're what `audit show/replay <index>` accept. CLI-mode entries carry a `[cli]` marker in listings; pre-0.6 entries count as `sdk`.
+
 ## [0.6.0] - 2026-06-11
 
 Claude Login mode grows up. The default, $0 mode used to run blind: `--dangerously-skip-permissions` with nothing but prompt text for protection, no audit trail ("only SDK mode is covered"), stderr string-scraping for the action display, and "session memory" that was 200-char task summaries re-injected into the system prompt. All four are gone — replaced with the claude CLI's real primitives. Minor-version bump for the new `--continue` flag and audit-log `mode` field.
