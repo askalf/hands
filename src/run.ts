@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { loadConfig } from './util/config.js';
 import type { RunOverrides } from './util/cli-overrides.js';
 import { runSdkMode } from './sdk-mode.js';
@@ -5,6 +6,7 @@ import { runCliMode } from './cli-mode.js';
 import { commandExists } from './platform/index.js';
 import { autoDetectDario } from './dario-detect.js';
 import { resolvePersona, resolveSystemPromptFile, type PersonaResolution } from './personas.js';
+import { loadLastSession } from './util/session-state.js';
 import * as output from './util/output.js';
 
 export interface RunOptions {
@@ -17,6 +19,8 @@ export interface RunOptions {
   persona?: string;
   /** Path to a system-prompt file. Bypasses persona lookup. SDK mode only. */
   systemPrompt?: string;
+  /** Resume the most recent Claude Login session (`hands run --continue`). The conversation lives in the claude CLI's session store, so this is Claude Login mode only. */
+  continueSession?: boolean;
   /** Validated -m/-b/-t values. Applied to the loaded config for this run only — never persisted. */
   overrides?: RunOverrides;
 }
@@ -34,7 +38,7 @@ export function hasSdkCredentials(
   return Boolean(configApiKey || env['ANTHROPIC_API_KEY'] || env['ANTHROPIC_AUTH_TOKEN']);
 }
 
-export async function run(prompt: string, options: RunOptions = {}): Promise<void> {
+export async function run(prompt: string | undefined, options: RunOptions = {}): Promise<void> {
   // Auto-detect dario before loading config so SDK initialization picks
   // up the right ANTHROPIC_BASE_URL. Silent fall-through on no-detect;
   // a one-line info log on detect (so users know they got the
@@ -83,6 +87,37 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
     Object.assign(config, options.overrides);
   }
 
+  // --continue: resolve the saved session pointer before any mode
+  // fallbacks, and refuse combinations that can't honor it. The
+  // conversation lives in the claude CLI's session store — there is
+  // nothing to resume in SDK mode.
+  let resume: { sessionId: string; cwd: string } | undefined;
+  if (options.continueSession) {
+    if (options.dryRun) {
+      output.error('--continue and --dry-run are mutually exclusive: --dry-run forces SDK mode, --continue is Claude Login only.');
+      process.exit(1);
+    }
+    if (config.authMode !== 'oauth') {
+      output.error('--continue only works in Claude Login mode — the claude CLI holds the conversation. Current auth mode is API key.');
+      output.info('Switch with `hands auth`, or start a fresh task without --continue.');
+      process.exit(1);
+    }
+    const last = await loadLastSession();
+    if (!last) {
+      output.error('No previous session to continue. Run `hands run "<task>"` first.');
+      process.exit(1);
+    }
+    if (!existsSync(last.cwd)) {
+      output.error(`The directory the previous session started from no longer exists: ${last.cwd}`);
+      output.info('Start a fresh session instead: hands run "<task>"');
+      process.exit(1);
+    }
+    resume = { sessionId: last.sessionId, cwd: last.cwd };
+    const ageMin = Math.max(1, Math.round((Date.now() - last.ts) / 60_000));
+    const age = ageMin < 60 ? `${ageMin}m` : ageMin < 60 * 24 ? `${Math.round(ageMin / 60)}h` : `${Math.round(ageMin / (60 * 24))}d`;
+    output.info(`resuming session ${last.sessionId.slice(0, 8)}… (last task ${age} ago: "${last.task.slice(0, 60)}")`);
+  }
+
   // --dry-run only works in SDK mode. In Claude Login (oauth) mode, `claude`
   // spawns as a child process and dispatches tools itself, so hands can't
   // intercept. Force API-key mode for this invocation so dry-run actually
@@ -101,6 +136,11 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
   if (config.authMode === 'oauth') {
     const hasClaude = await commandExists('claude');
     if (!hasClaude) {
+      if (resume) {
+        // The SDK fallback can't resume a claude-CLI conversation.
+        output.error('--continue needs the claude CLI, which was not found. Install it: npm i -g @anthropic-ai/claude-code');
+        process.exit(1);
+      }
       if (hasSdkCredentials(config.apiKey)) {
         output.warn('Claude CLI not found. Falling back to SDK mode (API key).');
         config.authMode = 'api_key';
@@ -123,8 +163,15 @@ export async function run(prompt: string, options: RunOptions = {}): Promise<voi
       await runCliMode(prompt, config, {
         voice: options.voice,
         ...(personaResolution ? { persona: personaResolution } : {}),
+        ...(resume ? { resume } : {}),
       });
     } else {
+      if (!prompt) {
+        // cli.ts only allows a missing prompt together with --continue,
+        // and --continue never reaches the SDK branch. Belt-and-braces.
+        output.error('A prompt is required in SDK mode.');
+        process.exit(1);
+      }
       const result = await runSdkMode(prompt, config, {
         dryRun: options.dryRun,
         ...(personaResolution ? { systemPromptOverride: personaResolution.prompt } : {}),

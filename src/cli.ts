@@ -47,16 +47,22 @@ program
 program
   .command('run')
   .description('Run the agent with a natural language prompt')
-  .argument('<prompt>', 'What you want the agent to do')
+  .argument('[prompt]', 'What you want the agent to do (optional with --continue)')
   .option('-m, --model <model>', 'Model to use (this run only; persist with `hands config --model`)')
   .option('-b, --budget <amount>', 'Max budget in USD (this run only; persist with `hands config --budget`)')
   .option('-t, --turns <count>', 'Max turns (this run only; persist with `hands config --turns`)')
   .option('-v, --voice', 'Use voice input (microphone → whisper transcription)')
+  .option('-c, --continue', 'Resume the most recent Claude Login session — works across exits and reboots')
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
   .option('--persona <name>', 'Use a named persona (bundled: minimal, thorough, concise, security-aware) or ~/.hands/personas/<name>.md. SDK mode only.')
   .option('--system-prompt <path>', 'Path to a system-prompt file. Bypasses --persona. SDK mode only.')
   .action(async (prompt, opts) => {
+    if (!prompt && !opts.continue) {
+      output.error('A prompt is required unless --continue is set.');
+      output.info('Usage: hands run "<task>"  ·  hands run --continue  ·  hands run --continue "<follow-up task>"');
+      process.exit(1);
+    }
     // -m/-b/-t apply to this run only — `hands config` is the
     // persistence path. (They used to be written straight to
     // config.json, unvalidated, so `-b abc` persisted a NaN budget
@@ -75,6 +81,7 @@ program
       voice: opts.voice,
       dryRun: opts.dryRun,
       noDario: opts.dario === false,
+      continueSession: opts.continue,
       ...(opts.persona ? { persona: opts.persona } : {}),
       ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
       ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
