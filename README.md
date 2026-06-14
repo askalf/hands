@@ -3,6 +3,8 @@
   <p align="center"><strong>Your LLM on your mouse, keyboard, and screen.</strong><br>A local computer-use agent that drives the OS through its native shell — PowerShell on Windows, <code>open</code> + AppleScript on macOS, <code>xdotool</code> / <code>ydotool</code> on Linux. Voice optional. Routes through <a href="https://github.com/askalf/dario">dario</a> or any Anthropic-compat endpoint, so the per-task token spend bills against the Claude Max subscription you already pay for instead of a hosted research-tool tier on top.</p>
 </p>
 
+> _hands — own your computer-use — your LLM on your own mouse and keyboard. Part of **[Own Your Stack](https://github.com/askalf)** — own your AI infrastructure instead of renting it by the token._
+
 <p align="center"><em>Pre-1.0. MIT. Independent, unofficial, third-party — see <a href="DISCLAIMER.md">DISCLAIMER</a>.</em></p>
 
 <p align="center">
@@ -486,6 +488,16 @@ Run `npm install && npm run build && npm test` to get a working dev tree (204 te
 
 ---
 
+## Own Your Stack
+
+Part of **[Own Your Stack](https://github.com/askalf)** — open tools for owning your AI infrastructure instead of renting it by the token. One subscription. Your box. Your terms.
+
+- **[dario](https://github.com/askalf/dario)** — own your routing
+- **[deepdive](https://github.com/askalf/deepdive)** — own your research
+- **[hands](https://github.com/askalf/hands)** — own your computer-use _(you are here)_
+- **[agent](https://github.com/askalf/agent)** — own your fleet
+- **[browser-bridge](https://github.com/askalf/browser-bridge)** — own your browser
+
 hands is part of the [askalf](https://askalf.org) ecosystem — a self-hosted AI workforce platform, now in early access.
 
 ---
@@ -498,32 +510,5 @@ hands is part of the [askalf](https://askalf.org) ecosystem — a self-hosted AI
 - [DISCLAIMER](DISCLAIMER.md)
 - [@ask_alf on X](https://x.com/ask_alf)
 
-## License
-
-MIT
-
 ---
-
-## Also by askalf
-
-| Project | What it does |
-|---------|-------------|
-| [agent](https://github.com/askalf/agent) | Device connector. Registers any machine with your askalf forge so the fleet can run shell or Claude Code tasks on it. |
-| [browser-bridge](https://github.com/askalf/browser-bridge) | Stealth headless Chromium in a container. CDP on 9222 — Playwright/Puppeteer/MCP-compatible. |
-| [claude-sync](https://github.com/askalf/claude-sync) | Cross-machine Claude Code session sync. |
-| [dario](https://github.com/askalf/dario) | Local LLM router. Use your Claude Max/Pro subscription as an API. |
-| [deepdive](https://github.com/askalf/deepdive) | Local research agent. Plan → search → fetch → extract → synthesize. Cited answers. |
-| [git-providers](https://github.com/askalf/git-providers) | Unified GitHub + GitLab + Bitbucket Cloud REST clients behind one GitProvider interface. Plus a 44-entry api-key-provider taxonomy. |
-| [install-kit](https://github.com/askalf/install-kit) | curl-pipe-bash template for self-hosted Docker apps. |
-| [pgflex](https://github.com/askalf/pgflex) | One Postgres API. Two modes (real PG ↔ PGlite WASM). |
-| [askalf platform](https://askalf.org) | Self-hosted AI workforce platform — now in early access. |
-| [redisflex](https://github.com/askalf/redisflex) | One Redis API. Two modes (ioredis ↔ in-process). |
-
-
----
-
-## Built by Sprayberry Labs
-
-This is one of the open-source building blocks from **[Sprayberry Labs](https://sprayberrylabs.com)** — an independent studio (Atlanta, GA) that ships bespoke software and **fixed-price code & security audits**, delivered with the AI workforce these tools are part of.
-
-**Got a codebase that needs an expert read?** → **[Scan a repo — free mini-audit](https://sprayberrylabs.com)**, or see the **$1,500 fixed-price Audit** and build Sprints. · [sprayberrylabs.com](https://sprayberrylabs.com) · hello@sprayberrylabs.com
+Part of **[Own Your Stack](https://github.com/askalf)** — own your AI infrastructure instead of renting it. Built by Thomas Sprayberry.
