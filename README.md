@@ -493,10 +493,18 @@ Run `npm install && npm run build && npm test` to get a working dev tree (204 te
 Part of **[Own Your Stack](https://github.com/askalf)** — open tools for owning your AI infrastructure instead of renting it by the token. One subscription. Your box. Your terms.
 
 - **[dario](https://github.com/askalf/dario)** — own your routing
+- **[hybrid](https://github.com/askalf/hybrid)** — own your inference
+- **[deja](https://github.com/askalf/deja)** — own your LLM cache
 - **[deepdive](https://github.com/askalf/deepdive)** — own your research
 - **[hands](https://github.com/askalf/hands)** — own your computer-use _(you are here)_
 - **[agent](https://github.com/askalf/agent)** — own your fleet
 - **[browser-bridge](https://github.com/askalf/browser-bridge)** — own your browser
+- **[warden](https://github.com/askalf/warden)** — own your agent security
+- **[canon](https://github.com/askalf/canon)** — own your agent skills
+- **[keeper](https://github.com/askalf/keeper)** — own your agent secrets
+- **[claude-sync](https://github.com/askalf/claude-sync)** — own your sessions
+- **[amnesia](https://github.com/askalf/amnesia)** — own your search
+- **[askalf platform](https://askalf.org)** — own your operation
 
 hands is part of the [askalf](https://askalf.org) ecosystem — a self-hosted AI workforce platform, now in early access.
 
