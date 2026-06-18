@@ -9,6 +9,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSdkMode } from '../dist/sdk-mode.js';
+import { GuardController } from '../dist/util/guard.js';
 
 // Redirect ~/.hands audit writes into a temp dir (audit.ts re-evaluates
 // the home dir per call — same pattern as the audit tests).
@@ -48,6 +49,57 @@ function scriptedClient(responses) {
     },
   };
 }
+
+function scriptedGuard(answers) {
+  const asked = [];
+  let i = 0;
+  const guard = new GuardController({
+    ask: async (prompt) => { asked.push(prompt); return answers[i++] ?? 'q'; },
+    out: () => {},
+  });
+  return { guard, asked };
+}
+
+test('agent loop: --guard denies a bash call → executor skipped, model sees the denial', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_b', name: 'bash', input: { command: 'echo hi' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'ok, stopping' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const { guard, asked } = scriptedGuard(['d']);
+  // No dryRun: a denied call returns before the executor, so nothing fires on the host.
+  const result = await runSdkMode('delete stuff', CONFIG, { testClient: client, testScreen: SCREEN, guard });
+  assert.equal(guard.denied, 1);
+  assert.equal(asked.length, 1, 'bash is state-changing → exactly one prompt');
+  assert.equal(result.text, 'ok, stopping');
+  const second = client.requests[1];
+  const tr = second.messages.find((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_result'));
+  assert.ok(tr, 'denial must come back as a tool_result');
+  const text = tr.content[0].content.map((c) => c.text).join(' ');
+  assert.match(text, /DENIED/);
+});
+
+test('agent loop: --guard does not prompt for read-only actions (screenshot)', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_s', name: 'computer', input: { action: 'screenshot' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const { guard, asked } = scriptedGuard([]);
+  const result = await runSdkMode('look at the screen', CONFIG, { dryRun: true, testClient: client, testScreen: SCREEN, guard });
+  assert.equal(asked.length, 0, 'screenshot is read-only → no prompt');
+  assert.equal(guard.allowed, 0);
+  assert.equal(result.text, 'done');
+});
+
+test('agent loop: --guard quit aborts the run before the next API call', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_b', name: 'bash', input: { command: 'echo hi' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'should not reach' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const { guard } = scriptedGuard(['q']);
+  const result = await runSdkMode('do the risky thing', CONFIG, { testClient: client, testScreen: SCREEN, guard });
+  assert.equal(client.requests.length, 1, 'aborted before the second API call');
+  assert.match(result.text, /aborted/i);
+});
 
 test('agent loop: tool_use turn → tool_result fed back → end_turn finishes', async () => {
   const client = scriptedClient([
