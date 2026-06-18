@@ -11,6 +11,22 @@ checklist.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-18
+
+Recipes. v0.7.0 made hands scriptable (`--once`, `--json`, `-c` to chain steps across invocations); v0.8.0 turns those primitives into a library of named, reusable, parameterized automations. `hands run @deploy` resolves a saved recipe, fills its `{{params}}`, and runs each step — and multi-step recipes chain through the exact session-continuity machinery `hands run -c` already uses, so a recipe is just that flow automated. Minor-version bump for the new `recipe` command group and the `@name` / `--set` run surface.
+
+PR in this release: #86 (recipes).
+
+### Added — recipes: save, list, and re-run named automations
+
+- **`hands run @<name>`** runs a saved recipe instead of a one-off prompt. A recipe lives at `~/.hands/recipes/<name>.md` — a human-readable, hand-editable, shareable markdown file with optional frontmatter (`description` / `persona` / `model`) and `## headings` that delimit steps. No headings = a single-step recipe from the whole body.
+- **`hands recipe save <name> "<task>"`** saves a single-step recipe; **`--step "<task>"`** (repeatable) saves a multi-step pipeline; `--desc`, `--persona`, `--model`, and `--force` (overwrite) round out the flags.
+- **`hands recipe list`** shows every recipe with step count and last-run status (`✔`/`✖` + relative time); `--json` for scripts. **`hands recipe show <name>`** prints the steps, defaults, declared `{{params}}`, and on-disk path (`--json` / `--raw`). **`hands recipe rm`** and **`hands recipe path`** round out the group.
+- **Parameters.** Prompts can carry `{{key}}` or `{{key=default}}` placeholders; fill them at run time with `hands run @greet --set name=World` (repeatable). A recipe with an unfilled, defaultless `{{param}}` fails fast — before any model call — with the exact `--set` to add. Substitution is pure string interpolation into the prompt; it never reaches a shell.
+- **Multi-step execution** drives the existing `run()` once per step: step 1 starts a Claude Login session, steps 2..n resume it via `--continue`, and the recipe halts the moment a step doesn't complete cleanly (exit code 2, same contract as `--once`). Every guardrail, audit entry, persona, and the dario auto-route apply exactly as a hand-run task — dario is detected once for the whole recipe. Because steps chain via session continuity (Claude Login only), a multi-step recipe in SDK mode, or under `--dry-run`, is refused up front with a directed message; single-step recipes run in either mode.
+- **Security.** Recipe names are validated as a single safe path segment (`[a-z0-9][a-z0-9_-]*`, ≤64 chars) before they become a filename, so `@../escape` can't traverse out of the recipes dir. Files are written `0600` in the `0700` `~/.hands/recipes/` dir, matching config and the audit log. Last-run bookkeeping lives in a `.runs.json` sidecar so the recipe files stay clean and portable.
+- New modules: `src/recipes.ts` (pure model — parse/serialize/params/validation/list-render — plus the fs CRUD + run-state layer) and `src/recipe-run.ts` (the per-step orchestrator). Zero new dependencies — the frontmatter parser is a 20-line flat `key: value` reader rather than a YAML dep. 37 new tests in `test/recipes.test.mjs` (241 total across 25 files), covering name validation / traversal refusal, frontmatter + step parsing, serialize round-trips, param substitution + defaults + missing-key reporting, the `@name` / `--set` arg parsers, list rendering, and the full CRUD + run-state round-trip against a redirected HOME.
+
 ## [0.7.0] - 2026-06-12
 
 hands becomes scriptable. v0.6.0 gave Claude Login mode real sessions, audit, and guardrails; v0.7.0 exposes that machinery to scripts, cron jobs, and orchestrators — `hands run` no longer has to end in an interactive prompt, and the now-dual-mode audit log is queryable. Minor-version bump for the new flags.

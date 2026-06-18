@@ -321,6 +321,8 @@ hands run --continue        # resume the most recent session (works after exit/r
 hands run -c "<follow-up>"  # resume and immediately run a follow-up task
 hands run --once "<task>"   # one task, no interactive loop — for scripts and cron
 hands run --json "<task>"   # one JSON result line on stdout (implies --once)
+hands run @<recipe>         # run a saved recipe (see Recipes below)
+hands run @<recipe> --set k=v   # fill the recipe's {{k}} placeholders
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" -m claude-opus-4-6     # override model (this run only)
@@ -343,6 +345,38 @@ echo "$result" | jq -r .result
 ```
 
 The JSON line is `{ ok, mode, result, turns, costUsd, tokens, sessionId? }` — stable field set, fields get added but never renamed. Failures emit `{ ok: false, error }` so a parser never sees pretty text. Exit codes: `0` task completed, `1` setup/config error, `2` task didn't complete cleanly.
+
+### Recipes
+
+Recipes (v0.8.0) are the library on top of the scripting primitives: a saved task — or an ordered pipeline of tasks — you re-run by name. A recipe is a markdown file at `~/.hands/recipes/<name>.md` (human-readable, hand-editable, shareable), with optional frontmatter and `## headings` that delimit steps.
+
+```bash
+# Save a single-step recipe…
+hands recipe save morning "open spotify and play discover weekly"
+
+# …or a multi-step pipeline (steps chain in one session — Claude Login mode)
+hands recipe save deploy --desc "pull, test, tag" \
+  --step "pull main and report how many commits came in" \
+  --step "run the full test suite; if anything fails, stop and report which" \
+  --step "if the tests passed, build and tag the next patch version"
+
+hands run @deploy                 # run it
+hands recipe list                 # name · step count · last-run ✔/✖
+hands recipe show deploy          # steps, defaults, declared params, file path
+hands recipe rm deploy            # delete
+hands recipe path deploy          # print the file path to hand-edit
+```
+
+**Parameters.** Prompts can carry `{{key}}` or `{{key=default}}` placeholders; fill them at run time:
+
+```bash
+hands recipe save greet "open notepad and type {{name}}"
+hands run @greet --set name=World          # → "open notepad and type World"
+```
+
+A recipe with an unfilled, defaultless `{{param}}` fails fast — before any model call — telling you the exact `--set` to add. Substitution is pure text interpolation into the prompt; it never reaches a shell.
+
+Multi-step recipes drive the same `run()` per step — step 1 starts a Claude Login session, the rest resume it via `--continue`, and the recipe halts the moment a step doesn't complete cleanly (exit code 2). Every guardrail, audit entry, persona, and the dario auto-route apply exactly as a hand-run task. Because steps chain via session continuity (Claude Login only), a multi-step recipe in SDK mode — or under `--dry-run` — is refused up front; single-step recipes run in either mode. Recipe names are validated as a single safe path segment before they become a filename, so `@../escape` can't traverse out of the recipes dir.
 
 ### Audit
 
@@ -385,6 +419,8 @@ src/
   doctor.ts         # health report
   dario-detect.ts   # localhost:3456 probe + auto-routing at startup
   personas.ts       # named system-prompt overrides (--persona)
+  recipes.ts        # recipe model — parse/serialize/params + ~/.hands/recipes CRUD
+  recipe-run.ts     # `hands run @name` — per-step orchestrator over run()
   audit-replay.ts   # hands audit list / show / replay
   system-prompt.ts  # OS-aware system-prompt builders (win32 / darwin / linux)
   platform/         # screenshot / mouse / keyboard / screen-info per platform + claude CLI resolver
@@ -484,7 +520,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (204 tests across 24 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (241 tests across 25 test files).
 
 ---
 
