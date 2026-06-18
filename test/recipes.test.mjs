@@ -166,6 +166,15 @@ test('serializeRecipe — description with a colon is quoted so it round-trips',
   assert.equal(parseRecipe('r', text).description, 'pull: then push');
 });
 
+test('serializeRecipe — description with quotes and backslashes round-trips (full JSON escaping)', () => {
+  // A naive `"`→`\"` escape left backslashes alone, producing an
+  // unterminated quoted value (CodeQL js/incomplete-sanitization). JSON
+  // escaping closes that.
+  const desc = 'path C:\\Users and a "quoted" bit, ending in a slash\\';
+  const text = serializeRecipe({ name: 'r', description: desc, steps: [{ prompt: 'x' }] });
+  assert.equal(parseRecipe('r', text).description, desc);
+});
+
 // ── substituteParams ────────────────────────────────────────────────
 
 test('substituteParams — fills present keys', () => {

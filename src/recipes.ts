@@ -94,8 +94,17 @@ export function parseFrontmatter(content: string): { meta: Record<string, string
     if (colon <= 0) continue;
     const key = trimmed.slice(0, colon).trim();
     let value = trimmed.slice(colon + 1).trim();
-    // Strip a single layer of matching quotes.
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    // A double-quoted value is JSON-escaped by serializeRecipe — parse it
+    // back fully (handles embedded quotes and backslashes). Fall back to a
+    // naive strip if it isn't valid JSON (hand-authored files). Single
+    // quotes are stripped literally.
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      try {
+        value = JSON.parse(value) as string;
+      } catch {
+        value = value.slice(1, -1);
+      }
+    } else if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
       value = value.slice(1, -1);
     }
     if (key) meta[key] = value;
@@ -167,8 +176,12 @@ export function parseRecipe(name: string, content: string): Recipe {
 // ── pure: serialize ─────────────────────────────────────────────────
 
 function frontmatterValue(v: string): string {
-  // Quote when the value could be misread as YAML or has a trailing/leading space.
-  return /[:#]|^\s|\s$/.test(v) ? `"${v.replace(/"/g, '\\"')}"` : v;
+  // Quote when the value could be misread as YAML, carries edge
+  // whitespace, or contains a quote/backslash. JSON.stringify escapes
+  // BOTH " and \ completely (a hand-rolled `"`→`\"` replace left
+  // backslashes unescaped, so `a\` produced an unterminated string) and
+  // round-trips exactly with the JSON.parse in parseFrontmatter.
+  return /["\\:#]|^\s|\s$/.test(v) ? JSON.stringify(v) : v;
 }
 
 /**
