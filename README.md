@@ -327,6 +327,7 @@ hands run @<recipe>         # run a saved recipe (see Recipes below)
 hands run @<recipe> --set k=v   # fill the recipe's {{k}} placeholders
 hands run --record <name> "<task>"   # crystallize the run into a deterministic macro
 hands play <name>           # replay a recorded macro — zero LLM, free (see Crystallize)
+hands run "<prompt>" --verify        # agent proves success with a real check before claiming done
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
@@ -406,6 +407,21 @@ hands macro list / show nightly / rm nightly
 - **Only effectful steps are recorded** — bash, file edits, clicks, keystrokes. Screenshots, `read_page`, `find_files`, cursor moves and `view` are skipped. Bash and file edits are the deterministic backbone (bash replays behind the same guardrail blocklist); coordinate clicks replay best-effort, scaled to the current screen.
 - Capture happens at the SDK dispatch site (like `--guard`/`--warden`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
 - **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
+
+### Self-verifying tasks
+
+Most computer-use agents fire-and-forget — they do the work and *tell* you it worked. `hands run --verify` (v0.12.0) makes the agent **prove** it: state a concrete success criterion, then run a real check before claiming done.
+
+```
+$ hands run --verify "add a 'build' script to package.json"
+  → edits package.json
+  verify: "package.json parses and has a build script"
+          → node -e "JSON.parse(fs.readFileSync('package.json')).scripts.build"
+  VERIFIED ✓ (exit 0)
+```
+
+- In **SDK mode** the agent gets a deterministic `verify(claim, command)` tool — a command that exits 0 only if the claim holds. hands runs it (behind the same guardrail blocklist as `bash`) and returns **VERIFIED** or **FAILED** with output. The verdict is an exit code, not the model grading itself; on FAILED it fixes and re-verifies.
+- In **Claude Login mode** the same instruction drives its built-in shell — so the **$0 default path keeps `--verify`**, no SDK-only tax. Threads through recipe steps too.
 
 ### Guarded mode
 
@@ -493,6 +509,7 @@ src/
   recipe-run.ts     # `hands run @name` — per-step orchestrator over run()
   macros.ts         # crystallize model — recorder, params, export-to-script + ~/.hands/macros CRUD
   macro-run.ts      # `hands play` — deterministic zero-LLM replay executor
+  verify.ts         # --verify — self-verification prompt + deterministic `verify` tool
   audit-replay.ts   # hands audit list / show / replay
   system-prompt.ts  # OS-aware system-prompt builders (win32 / darwin / linux)
   platform/         # screenshot / mouse / keyboard / screen-info per platform + claude CLI resolver
@@ -594,7 +611,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (289 tests across 28 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (297 tests across 29 test files).
 
 ---
 

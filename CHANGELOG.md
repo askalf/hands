@@ -11,6 +11,19 @@ checklist.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-19
+
+Self-verifying tasks. Most computer-use agents fire-and-forget — they do the work and *tell* you it worked. `hands run --verify` makes the agent **prove** it: it commits to a concrete success criterion and runs a real check before claiming done. In SDK mode the check runs through a dedicated `verify` tool whose exit code is ground truth (not the model's self-assessment); in Claude Login mode the same instruction drives its built-in shell. Works in both modes — no SDK-only tax on the $0 path. Minor-version bump for the new `--verify` flag.
+
+PR in this release: #91 (self-verifying tasks).
+
+### Added — `hands run --verify`: the agent proves success before claiming it
+
+- **SDK mode** gets a deterministic `verify(claim, command)` tool: the agent states a one-line claim and a shell command that exits 0 only if the claim holds; hands runs it (behind the same guardrail blocklist as `bash`) and returns **VERIFIED** (exit 0) or **FAILED** with the output, so the agent fixes the problem and re-verifies instead of declaring victory on vibes. The result is an exit code, not the model grading its own homework.
+- **Both modes** get a self-verification instruction appended to the system prompt: state a checkable criterion up front, prove it with a real check (`test -f` / `Test-Path` / a grep / `git diff --quiet` / a re-read), and never imply success without a passing check. Because it's prompt-driven in Claude Login mode, the default **$0 path keeps `--verify`** — no SDK-only tax.
+- Composes with everything: `--verify` threads through recipe steps too, so each step of a pipeline proves itself.
+- New module `src/verify.ts` — pure builders (`buildVerifyInstruction`, `buildVerifyTool`, `formatVerifyResult`) + a small `runVerifyCheck` executor that runs the check, passes the hard-block guardrail, and reports pass/fail by exit code (never throws — a failed check is a result). Wired into `sdk-mode.ts` (tool + dispatch) and `cli-mode.ts` (prompt). Zero new dependencies. 8 new tests (297 total across 29 files): the pure builders, real passing/failing/guardrail-blocked check execution, and two agent-loop integration tests that drive a VERIFIED and a FAILED check through `runSdkMode`.
+
 ## [0.11.0] - 2026-06-19
 
 Crystallize. A computer-use task normally costs LLM calls every single time you run it. v0.11.0 makes hands the first to compile a successful AI run into a **deterministic, zero-LLM macro** — record once, replay free forever. Shell-first tasks (hands' bias) crystallize into clean scripts you can `--export` as `.sh` / `.ps1`: the AI does the task once, then hands you the automation. Minor-version bump for the new `--record` flag, the `play` command, and the `macro` group.

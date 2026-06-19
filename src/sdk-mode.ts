@@ -18,6 +18,7 @@ import { findFiles } from './tools/find-files.js';
 import { classifyToolUse, previewToolUse, GuardAbort, type GuardController } from './util/guard.js';
 import type { WardenGate } from './util/warden.js';
 import type { MacroRecorder } from './macros.js';
+import { buildVerifyInstruction, buildVerifyTool, runVerifyCheck, formatVerifyResult } from './verify.js';
 
 interface RunResult {
   text: string;
@@ -46,6 +47,8 @@ export interface SdkModeOptions {
   warden?: WardenGate | undefined;
   /** When set, every successful effectful tool call (bash / file edit / click / keystroke) is captured for crystallization into a deterministic macro (`hands run --record <name>`). */
   recorder?: MacroRecorder | undefined;
+  /** When set, the agent gets a `verify` tool + a self-verification instruction (`hands run --verify`): it must prove success with a real check before claiming done. */
+  verify?: boolean | undefined;
   /** When set, replaces the default OS-aware system prompt with this exact string. Used by --persona / --system-prompt to swap in custom prompt content. */
   systemPromptOverride?: string | undefined;
   /** TEST HOOK — fake Anthropic client so the agent loop is testable without an API key. Combine with dryRun + testScreen. */
@@ -63,7 +66,8 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
     ?? (config.apiKey ? new Anthropic({ apiKey: config.apiKey }) : new Anthropic());
   const { width: realWidth, height: realHeight } = opts.testScreen ?? await getScreenSize();
   const model = config.model;
-  const systemPrompt = opts.systemPromptOverride ?? buildSdkSystemPrompt(normalizePlatform(process.platform));
+  const systemPrompt = (opts.systemPromptOverride ?? buildSdkSystemPrompt(normalizePlatform(process.platform)))
+    + (opts.verify ? `\n\n${buildVerifyInstruction(true)}` : '');
 
   // Calculate the display dimensions we tell Claude (matches screenshot size)
   const scaleFactor = Math.min(1.0, SCREENSHOT_MAX_WIDTH / realWidth);
@@ -150,6 +154,12 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
     } as unknown as Anthropic.Beta.BetaTool,
   ];
 
+  // Self-verification: hand the agent a deterministic `verify` tool whose
+  // exit code is ground truth, so "done" means a check passed, not vibes.
+  if (opts.verify) {
+    tools.push(buildVerifyTool() as unknown as Anthropic.Beta.BetaTool);
+  }
+
   const messages: Anthropic.Beta.BetaMessageParam[] = [
     {
       role: 'user',
@@ -228,6 +238,8 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
             result = await executeReadPage(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
           } else if (block.name === 'find_files') {
             result = await executeFindFiles(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
+          } else if (block.name === 'verify') {
+            result = await executeVerify(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
           } else {
             result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun, guard: opts.guard, recorder: opts.recorder });
           }
@@ -532,6 +544,38 @@ async function executeFindFiles(
     });
     return [{ type: 'text', text: `Error in find_files: ${msg}` }];
   }
+}
+
+/**
+ * Dispatcher for the `verify` tool (--verify). Runs the model's check
+ * command and reports pass/fail by exit code — ground truth the agent must
+ * pass before claiming success. Audit-logged; dry-run stubs it as verified.
+ */
+async function executeVerify(
+  input: Record<string, unknown>,
+  opts: { dryRun?: boolean | undefined } = {},
+): Promise<Array<{ type: string; text?: string }>> {
+  const claim = typeof input['claim'] === 'string' ? input['claim'] : '(unstated claim)';
+  const command = input['command'];
+  if (typeof command !== 'string' || !command.trim()) {
+    return [{ type: 'text', text: 'verify needs a `command`: a shell command that exits 0 if and only if your claim holds.' }];
+  }
+  if (opts.dryRun) {
+    output.action('verify', `[dry-run] ${claim}`);
+    await appendAudit({ tool: 'verify', args: { claim, command: command.slice(0, 200) }, durationMs: 0, ok: true, dryRun: true });
+    return [{ type: 'text', text: `[dry-run] would verify "${claim}" via: ${command}. Treating as VERIFIED so the loop continues.` }];
+  }
+  output.action('verify', claim);
+  const start = Date.now();
+  const outcome = runVerifyCheck(command);
+  await appendAudit({
+    tool: 'verify',
+    args: { claim, command: command.slice(0, 200) },
+    durationMs: Date.now() - start,
+    ok: outcome.ok,
+    ...(outcome.ok ? {} : { error: `exit ${outcome.exitCode}` }),
+  });
+  return [{ type: 'text', text: formatVerifyResult(claim, outcome) }];
 }
 
 /**
