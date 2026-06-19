@@ -9,6 +9,7 @@ import { loadConfig, saveConfig } from './util/config.js';
 import { parseOverrides } from './util/cli-overrides.js';
 import { isWhisperInstalled, setupWhisper } from './voice/index.js';
 import { runDoctor, renderDoctorText, renderDoctorJson, exitCodeFor } from './doctor.js';
+import { parseRecipeRef, parseSetPairs } from './recipes.js';
 import * as output from './util/output.js';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -17,6 +18,12 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+
+/** Commander processor that accumulates a repeatable option into an array. */
+const collect = (value: string, acc: string[]): string[] => {
+  acc.push(value);
+  return acc;
+};
 
 const program = new Command();
 
@@ -59,7 +66,51 @@ program
   .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
   .option('--persona <name>', 'Use a named persona (bundled: minimal, thorough, concise, security-aware) or ~/.hands/personas/<name>.md. SDK mode only.')
   .option('--system-prompt <path>', 'Path to a system-prompt file. Bypasses --persona. SDK mode only.')
+  .option('--set <pair>', 'Set a recipe parameter for {{placeholders}}: --set key=value (repeatable, put after the @recipe).', collect, [])
   .action(async (prompt, opts) => {
+    // `hands run @name` runs a saved recipe instead of a one-off prompt.
+    const recipeName = parseRecipeRef(prompt);
+    if (recipeName) {
+      if (opts.voice) {
+        output.error('--voice and @recipe are mutually exclusive — a recipe is non-interactive by nature.');
+        process.exit(1);
+      }
+      if (opts.continue) {
+        output.error('--continue and @recipe are mutually exclusive — a recipe starts (and chains) its own session.');
+        process.exit(1);
+      }
+      const setParsed = parseSetPairs(opts.set);
+      if (!setParsed.ok) {
+        setParsed.errors.forEach((e) => output.error(e));
+        process.exit(1);
+      }
+      if (opts.json) process.env['HANDS_QUIET'] = '1';
+      const parsedRecipeOv = parseOverrides({
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
+        ...(opts.turns !== undefined ? { turns: opts.turns } : {}),
+      });
+      if (!parsedRecipeOv.ok) {
+        parsedRecipeOv.errors.forEach((e) => output.error(e));
+        process.exit(1);
+      }
+      const { runRecipe } = await import('./recipe-run.js');
+      await runRecipe(recipeName, {
+        once: true,
+        json: opts.json,
+        dryRun: opts.dryRun,
+        noDario: opts.dario === false,
+        params: setParsed.params,
+        ...(opts.persona ? { persona: opts.persona } : {}),
+        ...(Object.keys(parsedRecipeOv.overrides).length > 0 ? { overrides: parsedRecipeOv.overrides } : {}),
+      });
+      return;
+    }
+    if (opts.set && opts.set.length > 0) {
+      output.warn('--set is ignored without a @recipe.');
+    }
+    // `@@task` escapes a literal prompt that should start with `@`.
+    if (prompt && prompt.startsWith('@@')) prompt = prompt.slice(1);
     if (!prompt && !opts.continue) {
       output.error('A prompt is required unless --continue is set.');
       output.info('Usage: hands run "<task>"  ·  hands run --continue  ·  hands run --continue "<follow-up task>"');
@@ -282,6 +333,142 @@ async function readLine(): Promise<string> {
     });
   });
 }
+
+// ── recipe ────────────────────────────────────────────────────────
+const recipeCmd = program
+  .command('recipe')
+  .description('Save and manage reusable task recipes — run them with `hands run @name`');
+
+recipeCmd
+  .command('save <name> [prompt]')
+  .description('Save a recipe: a single step from [prompt], or a pipeline with repeated --step.')
+  .option('--step <prompt>', 'A pipeline step (repeatable). Steps chain in one session — Claude Login mode only.', collect, [])
+  .option('--desc <text>', 'One-line description shown in `hands recipe list`.')
+  .option('--persona <name>', 'Default persona to run the recipe under.')
+  .option('--model <id>', 'Default model id for the recipe (an explicit -m on `run` still wins).')
+  .option('--force', 'Overwrite an existing recipe of the same name.')
+  .action(async (name, prompt, opts) => {
+    const { saveRecipe, isValidRecipeName } = await import('./recipes.js');
+    if (!isValidRecipeName(name)) {
+      output.error(`Invalid recipe name "${name}". Use letters, digits, dashes, and underscores.`);
+      process.exit(1);
+    }
+    const stepPrompts: string[] = (opts.step as string[]).map((s) => s.trim()).filter(Boolean);
+    if (prompt && stepPrompts.length > 0) {
+      output.error('Pass either a single [prompt] or one or more --step flags, not both.');
+      process.exit(1);
+    }
+    const steps = stepPrompts.length > 0
+      ? stepPrompts.map((p) => ({ prompt: p }))
+      : (prompt ? [{ prompt: String(prompt).trim() }] : []);
+    if (steps.length === 0) {
+      output.error('Nothing to save. Give a prompt: hands recipe save <name> "<task>"  (or one or more --step).');
+      process.exit(1);
+    }
+    try {
+      const path = await saveRecipe({
+        name,
+        steps,
+        ...(opts.desc ? { description: String(opts.desc) } : {}),
+        ...(opts.persona ? { persona: String(opts.persona) } : {}),
+        ...(opts.model ? { model: String(opts.model) } : {}),
+      }, { force: !!opts.force });
+      output.success(`saved recipe "${name}" (${steps.length} step${steps.length === 1 ? '' : 's'}) → ${path}`);
+      output.info(`run it: hands run @${name}`);
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+recipeCmd
+  .command('list')
+  .description('List saved recipes with step count and last-run status.')
+  .option('--json', 'Emit recipes (with run state) as a JSON array.')
+  .action(async (opts) => {
+    const { listRecipes, loadRunState, renderRecipeList } = await import('./recipes.js');
+    const recipes = await listRecipes();
+    const state = await loadRunState();
+    if (opts.json) {
+      console.log(JSON.stringify(recipes.map((r) => ({ ...r, run: state[r.name] ?? null }))));
+      return;
+    }
+    output.header(`Recipes (${recipes.length})`);
+    console.log(renderRecipeList(recipes.map((r) => ({ recipe: r, state: state[r.name] })), Date.now()));
+    if (recipes.length > 0) {
+      console.log();
+      output.info('Run one: hands run @<name>  ·  inspect: hands recipe show <name>');
+    }
+  });
+
+recipeCmd
+  .command('show <name>')
+  .description('Show a recipe — its steps, defaults, params, and on-disk path.')
+  .option('--json', 'Emit the parsed recipe as JSON.')
+  .option('--raw', 'Print the raw .md file content.')
+  .action(async (name, opts) => {
+    const { loadRecipe, recipePath, loadRunState, applyParams } = await import('./recipes.js');
+    try {
+      if (opts.raw) {
+        const { readFile } = await import('node:fs/promises');
+        process.stdout.write(await readFile(recipePath(name), 'utf-8'));
+        return;
+      }
+      const recipe = await loadRecipe(name);
+      if (opts.json) {
+        console.log(JSON.stringify(recipe, null, 2));
+        return;
+      }
+      const params = applyParams(recipe, {}).missing;
+      const runState = (await loadRunState())[name];
+      output.header(`recipe: ${recipe.name}`);
+      if (recipe.description) console.log(chalk.dim('Description:'), recipe.description);
+      if (recipe.persona) console.log(chalk.dim('Persona:'), recipe.persona);
+      if (recipe.model) console.log(chalk.dim('Model:'), recipe.model);
+      if (params.length > 0) console.log(chalk.dim('Params:'), params.map((p) => `{{${p}}}`).join(' '), chalk.dim('(--set key=value)'));
+      console.log(chalk.dim('File:'), recipePath(name));
+      if (runState?.lastRunAt != null) {
+        console.log(chalk.dim('Last run:'), new Date(runState.lastRunAt).toISOString(), runState.lastOk === false ? chalk.red('(failed)') : chalk.green('(ok)'));
+      }
+      console.log();
+      recipe.steps.forEach((s, i) => {
+        // Unnamed steps serialize as "## Step N" placeholders; don't echo that back as a label.
+        const label = s.name && s.name !== `Step ${i + 1}` ? ` — ${s.name}` : '';
+        console.log(chalk.cyan(`Step ${i + 1}${label}`));
+        console.log(s.prompt.split('\n').map((l) => `  ${l}`).join('\n'));
+        console.log();
+      });
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+recipeCmd
+  .command('rm <name>')
+  .description('Delete a recipe.')
+  .action(async (name) => {
+    const { deleteRecipe } = await import('./recipes.js');
+    try {
+      await deleteRecipe(name);
+      output.success(`deleted recipe "${name}"`);
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+recipeCmd
+  .command('path <name>')
+  .description('Print the absolute path of a recipe file (for hand-editing).')
+  .action(async (name) => {
+    const { recipePath, isValidRecipeName } = await import('./recipes.js');
+    if (!isValidRecipeName(name)) {
+      output.error(`Invalid recipe name "${name}". Use letters, digits, dashes, and underscores.`);
+      process.exit(1);
+    }
+    console.log(recipePath(name));
+  });
 
 program
   .command('voice-setup')
