@@ -7,12 +7,15 @@ import { commandExists } from './platform/index.js';
 import { autoDetectDario } from './dario-detect.js';
 import { resolvePersona, resolveSystemPromptFile, type PersonaResolution } from './personas.js';
 import { loadLastSession } from './util/session-state.js';
+import type { GuardController } from './util/guard.js';
 import * as output from './util/output.js';
 
 export interface RunOptions {
   voice?: boolean;
   /** When set, SDK mode's tool calls are logged + stubbed — nothing fires on the host. Not supported in Claude Login mode; forces a fallback. */
   dryRun?: boolean;
+  /** When set, every state-changing tool call pauses for approval before it fires (`hands run --guard`). Like dry-run, this is a SDK-mode gate, so it forces SDK mode for the invocation. Mutually exclusive with --dry-run / --json / --continue. */
+  guard?: boolean;
   /** When true, skip the dario auto-detect probe at startup. Use when the operator wants explicit api.anthropic.com routing despite dario being available. */
   noDario?: boolean;
   /** Named persona (bundled or ~/.hands/personas/<name>.md). Replaces the default OS-aware system prompt with the persona's text. SDK mode only. */
@@ -74,6 +77,21 @@ export function hasSdkCredentials(
 }
 
 export async function run(prompt: string | undefined, options: RunOptions = {}): Promise<void> {
+  // --guard is interactive and fires real actions one approval at a time,
+  // so it can't combine with the modes that contradict that.
+  if (options.guard && options.dryRun) {
+    output.error('--guard and --dry-run are mutually exclusive: guard asks before each action fires, dry-run fires nothing.');
+    process.exit(1);
+  }
+  if (options.guard && options.json) {
+    output.error('--guard and --json are mutually exclusive: guarded mode is interactive.');
+    process.exit(1);
+  }
+  if (options.guard && options.continueSession) {
+    output.error('--guard and --continue are mutually exclusive: guard forces SDK mode, --continue is Claude Login only.');
+    process.exit(1);
+  }
+
   // Auto-detect dario before loading config so SDK initialization picks
   // up the right ANTHROPIC_BASE_URL. Silent fall-through on no-detect;
   // a one-line info log on detect (so users know they got the
@@ -167,6 +185,19 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
     config.authMode = 'api_key';
   }
 
+  // --guard gates tool calls at the SDK dispatch site. In Claude Login
+  // mode the claude child runs the tools itself, so there's nothing to
+  // gate — force SDK mode (route through dario to keep it $0).
+  if (options.guard && config.authMode === 'oauth') {
+    if (!hasSdkCredentials(config.apiKey)) {
+      output.error('--guard runs in SDK mode, and no API key is configured.');
+      output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --guard to use Claude Login mode.');
+      process.exit(1);
+    }
+    output.warn('--guard runs in SDK mode (the gate must sit at the dispatch site). Forcing SDK mode; route through dario to keep it $0.');
+    config.authMode = 'api_key';
+  }
+
   // Auto-detect auth mode
   if (config.authMode === 'oauth') {
     const hasClaude = await commandExists('claude');
@@ -216,22 +247,34 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
         output.error('A prompt is required in SDK mode.');
         process.exit(1);
       }
-      const result = await runSdkMode(prompt, config, {
-        dryRun: options.dryRun,
-        ...(personaResolution ? { systemPromptOverride: personaResolution.prompt } : {}),
-      });
-      if (options.json) {
-        console.log(formatRunJson(result, 'sdk', !!options.dryRun));
-      } else {
-        if (result.text) {
-          output.header('Result');
-          console.log(result.text);
+      let guardHandle: { guard: GuardController; close: () => void } | undefined;
+      if (options.guard) {
+        const { createTerminalGuard } = await import('./util/guard.js');
+        guardHandle = createTerminalGuard();
+        output.info('guarded mode — every state-changing action pauses for [a]llow / [d]eny / [A]lways / [e]dit / [q]uit.');
+      }
+      try {
+        const result = await runSdkMode(prompt, config, {
+          dryRun: options.dryRun,
+          ...(personaResolution ? { systemPromptOverride: personaResolution.prompt } : {}),
+          ...(guardHandle ? { guard: guardHandle.guard } : {}),
+        });
+        if (guardHandle) output.info(guardHandle.guard.summary());
+        if (options.json) {
+          console.log(formatRunJson(result, 'sdk', !!options.dryRun));
+        } else {
+          if (result.text) {
+            output.header('Result');
+            console.log(result.text);
+          }
+          output.cost(
+            { input: result.inputTokens, output: result.outputTokens },
+            result.costUsd,
+            result.turns,
+          );
         }
-        output.cost(
-          { input: result.inputTokens, output: result.outputTokens },
-          result.costUsd,
-          result.turns,
-        );
+      } finally {
+        guardHandle?.close();
       }
     }
   } catch (err) {

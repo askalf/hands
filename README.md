@@ -246,6 +246,7 @@ hands is a high-trust tool: **the agent has shell, keyboard, mouse, and screensh
 ### Operating recommendations
 
 - **Review `--dry-run` for anything you don't trust by reflex.** SDK-mode `--dry-run` runs the full agent loop with every tool call audit-logged but stubbed — no shell fires, no keys press, no mouse moves. Read `~/.hands/audit.jsonl` after; reopen for real if it looks right.
+- **Step through an untrusted task with `--guard`.** `hands run --guard` pauses before every state-changing action for allow / deny / always / edit / quit — the middle ground between dry-run and full-send, and the most direct mitigation against a prompt-injected task taking an action you didn't intend. SDK mode (forces it like dry-run).
 - **Keep destructive operations targeted.** `hands run "delete files in ~/Downloads"` is a safer prompt than `hands run "clean up my computer"`. The narrower the scope of the prompt, the narrower the agent's reach for failure modes.
 - **Use `--dry-run` when you want a plan before any execution.** Both modes audit-log every tool call now; what dry-run adds is stubbed execution — the full agent loop with nothing firing on the host. It forces SDK mode (needs an API key or dario).
 - **Don't run hands as root / Administrator.** The agent's shell access is exactly your shell access. Running as root makes `rm -rf /` a one-prompt foot-gun the guardrails won't necessarily catch.
@@ -325,6 +326,7 @@ hands run @<recipe>         # run a saved recipe (see Recipes below)
 hands run @<recipe> --set k=v   # fill the recipe's {{k}} placeholders
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
+hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
 hands run "<prompt>" -m claude-opus-4-6     # override model (this run only)
 hands run "<prompt>" -b 10.00         # SDK budget cap (USD); default $5.00
 hands run "<prompt>" -t 100           # max turns per task; default 50
@@ -377,6 +379,26 @@ hands run @greet --set name=World          # → "open notepad and type World"
 A recipe with an unfilled, defaultless `{{param}}` fails fast — before any model call — telling you the exact `--set` to add. Substitution is pure text interpolation into the prompt; it never reaches a shell.
 
 Multi-step recipes drive the same `run()` per step — step 1 starts a Claude Login session, the rest resume it via `--continue`, and the recipe halts the moment a step doesn't complete cleanly (exit code 2). Every guardrail, audit entry, persona, and the dario auto-route apply exactly as a hand-run task. Because steps chain via session continuity (Claude Login only), a multi-step recipe in SDK mode — or under `--dry-run` — is refused up front; single-step recipes run in either mode. Recipe names are validated as a single safe path segment before they become a filename, so `@../escape` can't traverse out of the recipes dir.
+
+### Guarded mode
+
+`--dry-run` fires nothing; full-send fires everything. `hands run --guard` (v0.9.0) is the mode in between — every **state-changing** action pauses for an explicit decision before it executes:
+
+```
+$ hands run --guard "clean up my downloads folder"
+
+  ▶ bash: Remove-Item ~/Downloads/*.tmp
+    [a]llow  [d]eny  [A]lways  [e]dit  [q]uit ? a
+  ✔ removed 14 files
+
+  ▶ bash: Remove-Item ~/Downloads/old -Recurse
+    [a]llow  [d]eny  [A]lways  [e]dit  [q]uit ? d
+  ⚠ [denied] bash: Remove-Item ~/Downloads/old -Recurse
+```
+
+- **`[a]llow`** runs it once · **`[d]eny`** skips it and tells the model it was blocked (so it adapts or stops) · **`[A]lways`** allows that tool for the rest of the run · **`[e]dit`** revises the bash command or typed text before it runs · **`[q]uit`** ends the run. A bare Enter re-prompts — it never fires on an accidental keypress.
+- **Read-only calls never prompt** — screenshot, zoom, mouse-move, `read_page`, `find_files`, and the editor's `view` pass straight through. Only actions that can change host state stop for approval.
+- Like `--dry-run`, the gate sits at the SDK dispatch site, so `--guard` runs in **SDK mode** (in Claude Login mode it forces SDK for the invocation — route through dario to keep it $0). It's mutually exclusive with `--dry-run`, `--json`, and `--continue`. Approved calls still pass the full guardrail blocklist and land in the audit log (denials too); the run ends with a `guard: N allowed, M denied` tally.
 
 ### Audit
 
@@ -435,6 +457,7 @@ src/
     url-safety.ts   # SSRF guard for read_page
     page-cleanup.ts # HTML cleanup pipeline for read_page
     cli-overrides.ts# per-run -m / -b / -t validation
+    guard.ts        # --guard decision engine (classify / preview / parse + GuardController)
     output.ts       # chalked stdout helpers
 ```
 
@@ -520,7 +543,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (241 tests across 25 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (264 tests across 26 test files).
 
 ---
 

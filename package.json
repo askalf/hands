@@ -1,6 +1,6 @@
 {
   "name": "@askalf/hands",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "own your computer-use — your LLM on your own mouse and keyboard. Part of Own Your Stack.",
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",

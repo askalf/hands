@@ -11,6 +11,20 @@ checklist.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-18
+
+Guarded step-through mode. hands has had two postures: `--dry-run` (the agent plans, nothing fires) and full-send (every tool call executes). v0.9.0 adds the one in between — `hands run --guard` pauses for an explicit decision before each state-changing action, so you can let the agent drive while keeping a hand on the wheel. This is the operating answer to the README's own threat model (prompt injection, "review before you trust a new task class"). Minor-version bump for the new flag.
+
+PR in this release: #87 (guarded mode).
+
+### Added — `hands run --guard`: approve each action before it fires
+
+- Before every **state-changing** tool call — bash, clicks, typing, key presses, scrolls, drags, file create/edit — hands prints a one-line preview and waits: **`[a]llow`** (once), **`[d]eny`** (skip, and tell the model so it adapts or stops), **`[A]lways`** (allow this tool for the rest of the run), **`[e]dit`** (revise the bash command or typed text before it runs), **`[q]uit`** (end the run). A bare Enter re-prompts rather than firing — a guarded session shouldn't act on an accidental keypress.
+- **Read-only calls pass through untouched** — screenshot, zoom, mouse-move, wait, `read_page`, `find_files`, and the text editor's `view` never prompt. The gate is only where it earns its keep: actions that can change host state. Classification mirrors `hands audit replay`'s read-only/state-changing split.
+- **Denials and edits flow back to the model.** A denied action returns a result telling the agent it was blocked and not to retry — so it picks a different approach or stops cleanly rather than looping. An edit re-runs the audit summary on the revised input, so the log records what actually executed.
+- **Same dispatch-site gate as `--dry-run`.** Guarding has to intercept where hands executes the tools, so — exactly like `--dry-run` — `--guard` runs in SDK mode; in Claude Login mode it forces SDK for the invocation (route through dario to keep it $0). `--guard` is mutually exclusive with `--dry-run` (nothing to approve), `--json` (interactive), and `--continue` (Claude Login only); a multi-step `@recipe` under `--guard` is refused up front for the same reason. Every approved call still hits the full guardrail blocklist and lands in `~/.hands/audit.jsonl` (denials logged too); the run ends with a `guard: N allowed, M denied` tally.
+- New module `src/util/guard.ts` — pure `classifyToolUse` / `previewToolUse` / `parseGuardAnswer` plus a `GuardController` whose terminal I/O is injected so the prompt loop is testable without a TTY. 22 new tests (19 unit in `test/guard.test.mjs` + 3 agent-loop integration tests in `test/sdk-loop.test.mjs` that drive deny / read-only-passthrough / quit-abort through the real `runSdkMode`). 264 total across 26 files. Zero new dependencies.
+
 ## [0.8.0] - 2026-06-18
 
 Recipes. v0.7.0 made hands scriptable (`--once`, `--json`, `-c` to chain steps across invocations); v0.8.0 turns those primitives into a library of named, reusable, parameterized automations. `hands run @deploy` resolves a saved recipe, fills its `{{params}}`, and runs each step — and multi-step recipes chain through the exact session-continuity machinery `hands run -c` already uses, so a recipe is just that flow automated. Minor-version bump for the new `recipe` command group and the `@name` / `--set` run surface.

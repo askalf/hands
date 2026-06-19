@@ -15,6 +15,7 @@ import { buildSdkSystemPrompt, normalizePlatform } from './system-prompt.js';
 import { redactSecrets } from './util/redact.js';
 import { readPage } from './tools/read-page.js';
 import { findFiles } from './tools/find-files.js';
+import { classifyToolUse, previewToolUse, GuardAbort, type GuardController } from './util/guard.js';
 
 interface RunResult {
   text: string;
@@ -37,6 +38,8 @@ const SCREENSHOT_MAX_WIDTH = 1280;
 export interface SdkModeOptions {
   /** When true, every tool call is logged to audit + stubbed — no shell, mouse, keyboard, or screenshot actually fires. Agent still sees "success" results so the loop continues. */
   dryRun?: boolean | undefined;
+  /** When set, every state-changing tool call pauses for an [a]llow/[d]eny/[A]lways/[e]dit/[q]uit decision before it fires (`hands run --guard`). Read-only calls pass through. Mutually exclusive with dryRun. */
+  guard?: GuardController | undefined;
   /** When set, replaces the default OS-aware system prompt with this exact string. Used by --persona / --system-prompt to swap in custom prompt content. */
   systemPromptOverride?: string | undefined;
   /** TEST HOOK — fake Anthropic client so the agent loop is testable without an API key. Combine with dryRun + testScreen. */
@@ -186,6 +189,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
     // Process response content blocks
     const toolResults: Anthropic.Beta.BetaMessageParam[] = [];
     let hasToolUse = false;
+    let aborted = false;
 
     for (const block of response.content) {
       if (block.type === 'text') {
@@ -200,9 +204,16 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
           } else if (block.name === 'find_files') {
             result = await executeFindFiles(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
           } else {
-            result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun });
+            result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun, guard: opts.guard });
           }
         } catch (err) {
+          // [q]uit at the guard prompt ends the whole run, not just this call.
+          if (err instanceof GuardAbort) {
+            output.warn('Run aborted at the guard prompt.');
+            finalText = finalText || 'Run aborted by operator before completion.';
+            aborted = true;
+            break;
+          }
           const errMsg = err instanceof Error ? err.message : String(err);
           output.warn(`Action failed: ${errMsg}`);
           result = [{ type: 'text', text: `Error executing action: ${errMsg}` }];
@@ -222,6 +233,8 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
 
     // Add assistant response to messages
     messages.push({ role: 'assistant', content: response.content });
+
+    if (aborted) break;
 
     if (!hasToolUse || response.stop_reason === 'end_turn') {
       break;
@@ -253,21 +266,46 @@ async function executeComputerAction(
   toolName: string,
   input: Record<string, unknown>,
   scaleFactor: number,
-  opts: { dryRun?: boolean | undefined } = {},
+  opts: { dryRun?: boolean | undefined; guard?: GuardController | undefined } = {},
 ): Promise<Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>> {
-  const action = input['action'] as string | undefined;
-  const auditArgs = summarizeToolArgs(toolName, input);
+  let effInput = input;
+  let action = effInput['action'] as string | undefined;
+  let auditArgs = summarizeToolArgs(toolName, effInput);
   const start = Date.now();
 
+  // Guarded mode: pause for an explicit decision before any state-changing
+  // call fires. Read-only calls (screenshot, view, mouse_move…) pass
+  // through untouched. [q]uit raises GuardAbort, which the loop catches to
+  // end the run. An [e]dit returns a revised input we re-summarize from.
+  if (opts.guard && classifyToolUse(toolName, effInput) === 'state-changing') {
+    const decision = await opts.guard.decide({
+      tool: toolName,
+      action,
+      input: effInput,
+      preview: previewToolUse(toolName, effInput),
+    });
+    if (decision.kind === 'abort') throw new GuardAbort();
+    if (decision.kind === 'deny') {
+      output.warn(`[denied] ${previewToolUse(toolName, effInput)}`);
+      await appendAudit({ tool: toolName, action, args: auditArgs, durationMs: 0, ok: false, error: 'denied by operator (guard)' });
+      return [{ type: 'text', text: `The operator DENIED this action: ${previewToolUse(toolName, effInput)}. Do not retry it — choose a different approach, or stop and report that you were blocked.` }];
+    }
+    if (decision.input) {
+      effInput = decision.input;
+      action = effInput['action'] as string | undefined;
+      auditArgs = summarizeToolArgs(toolName, effInput);
+    }
+  }
+
   if (opts.dryRun) {
-    const stub = dryRunStub(toolName, action, input);
-    output.action(toolName, `[dry-run] ${action ?? describeCall(toolName, input)}`);
+    const stub = dryRunStub(toolName, action, effInput);
+    output.action(toolName, `[dry-run] ${action ?? describeCall(toolName, effInput)}`);
     await appendAudit({ tool: toolName, action, args: auditArgs, durationMs: 0, ok: true, dryRun: true });
     return [{ type: 'text', text: stub }];
   }
 
   try {
-    const result = await executeComputerActionInner(toolName, input, scaleFactor);
+    const result = await executeComputerActionInner(toolName, effInput, scaleFactor);
     await appendAudit({ tool: toolName, action, args: auditArgs, durationMs: Date.now() - start, ok: true });
     return result;
   } catch (err) {
