@@ -24,6 +24,8 @@ export interface RunOptions {
   record?: string;
   /** Self-verify: the agent must prove success with a real check before claiming done (`hands run --verify`). Works in both modes. */
   verify?: boolean;
+  /** Semantic UI targeting: give the agent `ui_tree` + `click_element` (accessibility-tree) tools (`hands run --ui`). SDK-mode tools; Windows-only for now. */
+  ui?: boolean;
   /** When true, skip the dario auto-detect probe at startup. Use when the operator wants explicit api.anthropic.com routing despite dario being available. */
   noDario?: boolean;
   /** Named persona (bundled or ~/.hands/personas/<name>.md). Replaces the default OS-aware system prompt with the persona's text. SDK mode only. */
@@ -257,6 +259,17 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
     config.authMode = 'api_key';
   }
 
+  // --ui adds SDK-mode tools (ui_tree / click_element).
+  if (options.ui && config.authMode === 'oauth') {
+    if (!hasSdkCredentials(config.apiKey)) {
+      output.error('--ui adds SDK-mode tools, and no API key is configured.');
+      output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --ui.');
+      process.exit(1);
+    }
+    output.warn('--ui adds SDK-mode tools (semantic targeting). Forcing SDK mode; route through dario to keep it $0.');
+    config.authMode = 'api_key';
+  }
+
   // Auto-detect auth mode
   if (config.authMode === 'oauth') {
     const hasClaude = await commandExists('claude');
@@ -364,6 +377,7 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
           ...(wardenGate ? { warden: wardenGate } : {}),
           ...(recorder ? { recorder } : {}),
           ...(options.verify ? { verify: true } : {}),
+          ...(options.ui ? { ui: true } : {}),
         });
         if (recordName && recorder) {
           if (recorder.steps.length > 0) {

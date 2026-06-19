@@ -151,6 +151,17 @@ test('agent loop: --verify reports a FAILED check so the agent can fix it', asyn
   assert.match(tr.content[0].content[0].text, /FAILED/);
 });
 
+test('agent loop: --ui registers ui_tree + click_element and the UI instruction', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'text', text: 'no UI work needed' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  await runSdkMode('do a thing', CONFIG, { testClient: client, testScreen: SCREEN, ui: true });
+  const tools = client.requests[0].tools.map((t) => t.name);
+  assert.ok(tools.includes('ui_tree'), 'ui_tree registered');
+  assert.ok(tools.includes('click_element'), 'click_element registered');
+  assert.match(client.requests[0].system, /UI TARGETING/);
+});
+
 test('agent loop: tool_use turn → tool_result fed back → end_turn finishes', async () => {
   const client = scriptedClient([
     {

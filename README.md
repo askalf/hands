@@ -329,6 +329,7 @@ hands run --record <name> "<task>"   # crystallize the run into a deterministic 
 hands play <name>           # replay a recorded macro — zero LLM, free (see Crystallize)
 hands run "<prompt>" --verify        # agent proves success with a real check before claiming done
 hands watch --on-file <glob> --do "<task>"   # fire a task when a file/clipboard/command/timer event hits
+hands run "<prompt>" --ui            # target controls by name via the accessibility tree (Windows, SDK mode)
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
@@ -408,6 +409,21 @@ hands macro list / show nightly / rm nightly
 - **Only effectful steps are recorded** — bash, file edits, clicks, keystrokes. Screenshots, `read_page`, `find_files`, cursor moves and `view` are skipped. Bash and file edits are the deterministic backbone (bash replays behind the same guardrail blocklist); coordinate clicks replay best-effort, scaled to the current screen.
 - Capture happens at the SDK dispatch site (like `--guard`/`--warden`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
 - **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
+
+### Semantic UI targeting
+
+Most computer-use agents click by **pixel** — screenshot, reason about coordinates, click, screenshot to check. It's slow, costly, and brittle to any layout shift. `hands run --ui` (v0.14.0) reads the **OS accessibility tree** instead and clicks by **name and role** — same idea as hands' shell-first bias, applied to the GUI.
+
+```
+$ hands run --ui "open the File menu and click Save"
+  ui_tree → MenuItem "File", Button "Save", Button "Save As"…  (no screenshot)
+  click_element "File"  → clicked MenuItem "File"
+  click_element "Save"  → clicked Button "Save"
+```
+
+- **`ui_tree`** lists the active window's named controls (name, role, position) — a semantic view, no screenshot. **`click_element(name, role?)`** clicks a control by its visible name; no coordinates, so it survives layout changes. No unambiguous match → it returns the candidates.
+- The system prompt tells the agent to **prefer** these over pixel clicking when a control has a name, and screenshot only for what the tree doesn't expose.
+- Windows uses UIAutomation via a signed PowerShell host (no `.ps1`, no unsigned native code). macOS (AX) / Linux (AT-SPI) aren't wired yet and say so. SDK-mode tools, so `--ui` forces SDK mode. Experimental; very high-DPI displays may need verification.
 
 ### Watchers — reactive computer use
 
@@ -532,6 +548,7 @@ src/
   verify.ts         # --verify — self-verification prompt + deterministic `verify` tool
   watch.ts          # `hands watch` — pure reactive trigger engine (file/clipboard/command/interval)
   watch-run.ts      # watch probes (fs/clipboard/process) + the poll/fire loop
+  ui.ts             # --ui — accessibility-tree enumeration + ui_tree / click_element tools
   audit-replay.ts   # hands audit list / show / replay
   system-prompt.ts  # OS-aware system-prompt builders (win32 / darwin / linux)
   platform/         # screenshot / mouse / keyboard / screen-info per platform + claude CLI resolver
@@ -633,7 +650,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (305 tests across 30 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (314 tests across 31 test files).
 
 ---
 

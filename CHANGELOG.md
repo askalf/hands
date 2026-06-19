@@ -11,6 +11,23 @@ checklist.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-19
+
+Semantic UI targeting. Most computer-use agents click by pixel: screenshot, reason about coordinates, click, screenshot again to check — slow, costly, and brittle to any layout shift. `hands run --ui` reads the OS accessibility tree instead and clicks **by name and role** — "click the Save button", no screenshot, no coordinates. Same idea as hands' shell-first bias, applied to the GUI. Windows-first (UIAutomation); macOS/Linux report not-yet. Minor-version bump for the new `--ui` flag.
+
+PR in this release: #93 (semantic UI targeting).
+
+### Added — `hands run --ui`: target controls by name, not pixels
+
+- Two SDK-mode tools: **`ui_tree`** lists the active window's named controls from the accessibility tree (name, role, position, enabled) — a semantic, screenshot-free view; **`click_element(name, role?)`** resolves a control by its visible name (case-insensitive, optional role to disambiguate) and clicks its center. No screenshot, no pixel coordinates — dramatically faster and more robust than a screenshot+coordinate loop, and it survives layout changes. When there's no unambiguous match, `click_element` returns the available candidates so the agent can refine.
+- A system-prompt nudge tells the agent to **prefer** these over pixel clicking whenever a control has a visible name, and fall back to a screenshot only for what the tree doesn't expose.
+- Windows uses **UIAutomation** via a signed PowerShell host (`-Command`, no `.ps1` file → no execution-policy or Smart-App-Control snag; no unsigned native code), capped and filtered to named, on-screen controls. macOS (AX) and Linux (AT-SPI) aren't wired yet and say so clearly. SDK-mode tools, so `--ui` forces SDK mode (route through dario for $0).
+- New module `src/ui.ts` — pure parsing (`parseUiElements`, tolerant of PowerShell's single-object/empty output), matching (`findElements` — substring + role filter, exact-name and enabled ranking), `elementCenter`, the tool/prompt builders, and the platform enumerator. Wired into `sdk-mode.ts` (two tools + dispatch). Zero new dependencies. 9 new tests (314 total across 31 files): pure parsing/matching/centering, the builders, an sdk-loop test asserting both tools + the instruction are registered, and a real UIAutomation enumeration on Windows (skipped, with the off-Windows rejection asserted, elsewhere).
+
+### Note
+
+`--ui` is experimental and Windows-only for now; `click_element` resolves at real screen coordinates, so very high-DPI displays may need verification. UI clicks aren't yet routed through `--guard`/`--warden` (combine with caution).
+
 ## [0.13.0] - 2026-06-19
 
 Watchers. hands has been request→response: you ask, it acts. `hands watch` makes it **reactive** — it fires a task (or a free recorded macro) when something happens: a new file appears, the clipboard changes and matches a pattern, a command newly succeeds, or a timer ticks. A local automation daemon, $0 when paired with a macro. Minor-version bump for the new `watch` command.
