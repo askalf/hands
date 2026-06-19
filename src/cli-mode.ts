@@ -12,6 +12,7 @@ import { VoiceInput } from './voice/index.js';
 import { buildCliSystemPrompt, normalizePlatform, type SupportedPlatform } from './system-prompt.js';
 import { resolveClaudeInvocation } from './platform/claude-cli.js';
 import type { PersonaResolution } from './personas.js';
+import { buildVerifyInstruction } from './verify.js';
 import {
   StreamJsonParser, pendingToolCall, auditEntryFor, flushPendingAudits,
   type StreamEvent, type ResultEvent, type PendingToolCall,
@@ -49,6 +50,8 @@ export interface CliModeOptions {
   resume?: { sessionId: string; cwd: string } | undefined;
   /** Run the initial task and return — no "What next?" loop. The scripting path (`hands run --once` / `--json`). */
   once?: boolean | undefined;
+  /** Append the self-verification instruction so the agent proves success before claiming done (`hands run --verify`). */
+  verify?: boolean | undefined;
 }
 
 /**
@@ -193,6 +196,7 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
         persona: options.persona,
         resumeSessionId: activeSessionId,
         cwd: spawnCwd,
+        verify: options.verify,
       });
       totalTurns += result.turns;
 
@@ -372,13 +376,16 @@ interface SpawnClaudeOptions {
   resumeSessionId?: string | undefined;
   /** Spawn directory override — claude scopes session lookup to the dir a session started in. */
   cwd?: string | undefined;
+  /** Append the self-verification instruction (`hands run --verify`). */
+  verify?: boolean | undefined;
 }
 
 async function spawnClaude(prompt: string, config: AgentConfig, opts: SpawnClaudeOptions): Promise<RunResult> {
   const invocation = await resolveClaudeInvocation();
   return new Promise((resolvePromise, reject) => {
     const sessionContext = opts.memory ? buildSessionContext(opts.memory) : '';
-    const systemPrompt = composeCliAppendPrompt(normalizePlatform(process.platform), sessionContext, opts.persona);
+    const systemPrompt = composeCliAppendPrompt(normalizePlatform(process.platform), sessionContext, opts.persona)
+      + (opts.verify ? `\n\n${buildVerifyInstruction(false)}` : '');
 
     const args = buildClaudeArgs({
       prefixArgs: invocation.prefixArgs,

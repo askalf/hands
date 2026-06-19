@@ -22,6 +22,8 @@ export interface RunOptions {
   warden?: boolean;
   /** Crystallize: record this run's effectful tool calls into a deterministic macro of this name (`hands run --record <name>`). SDK mode only (capture is at the dispatch site). */
   record?: string;
+  /** Self-verify: the agent must prove success with a real check before claiming done (`hands run --verify`). Works in both modes. */
+  verify?: boolean;
   /** When true, skip the dario auto-detect probe at startup. Use when the operator wants explicit api.anthropic.com routing despite dario being available. */
   noDario?: boolean;
   /** Named persona (bundled or ~/.hands/personas/<name>.md). Replaces the default OS-aware system prompt with the persona's text. SDK mode only. */
@@ -286,6 +288,7 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
       const result = await runCliMode(prompt, config, {
         voice: options.voice,
         once: options.once,
+        ...(options.verify ? { verify: true } : {}),
         ...(personaResolution ? { persona: personaResolution } : {}),
         ...(resume ? { resume } : {}),
       });
@@ -360,6 +363,7 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
           ...(options.guard && guardHandle ? { guard: guardHandle.guard } : {}),
           ...(wardenGate ? { warden: wardenGate } : {}),
           ...(recorder ? { recorder } : {}),
+          ...(options.verify ? { verify: true } : {}),
         });
         if (recordName && recorder) {
           if (recorder.steps.length > 0) {

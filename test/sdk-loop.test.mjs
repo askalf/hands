@@ -128,6 +128,29 @@ test('agent loop: --warden abort ends the run before the next API call', async (
   assert.match(result.text, /aborted/i);
 });
 
+test('agent loop: --verify registers the tool + instruction and feeds VERIFIED back', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tv', name: 'verify', input: { claim: 'node runs', command: 'node -e "process.exit(0)"' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'verified, done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const result = await runSdkMode('do a thing', CONFIG, { testClient: client, testScreen: SCREEN, verify: true });
+  assert.ok(client.requests[0].tools.some((t) => t.name === 'verify'), 'verify tool is registered');
+  assert.match(client.requests[0].system, /SELF-VERIFICATION/, 'self-verify instruction is in the system prompt');
+  const tr = client.requests[1].messages.find((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_result'));
+  assert.match(tr.content[0].content[0].text, /VERIFIED/);
+  assert.equal(result.text, 'verified, done');
+});
+
+test('agent loop: --verify reports a FAILED check so the agent can fix it', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tv', name: 'verify', input: { claim: 'exits zero', command: 'node -e "process.exit(2)"' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'will fix' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  await runSdkMode('do a thing', CONFIG, { testClient: client, testScreen: SCREEN, verify: true });
+  const tr = client.requests[1].messages.find((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_result'));
+  assert.match(tr.content[0].content[0].text, /FAILED/);
+});
+
 test('agent loop: tool_use turn → tool_result fed back → end_turn finishes', async () => {
   const client = scriptedClient([
     {
