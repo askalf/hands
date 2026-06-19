@@ -97,6 +97,7 @@ export async function runRecipe(name: string, options: RecipeRunOptions = {}): P
       ...(options.guard ? { guard: options.guard } : {}),
       ...(options.warden ? { warden: options.warden } : {}),
       ...(options.verify ? { verify: options.verify } : {}),
+      ...(options.ui ? { ui: options.ui } : {}),
       ...(persona ? { persona } : {}),
       ...(overrides ? { overrides } : {}),
     });

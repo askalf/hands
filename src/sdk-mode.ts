@@ -19,6 +19,10 @@ import { classifyToolUse, previewToolUse, GuardAbort, type GuardController } fro
 import type { WardenGate } from './util/warden.js';
 import type { MacroRecorder } from './macros.js';
 import { buildVerifyInstruction, buildVerifyTool, runVerifyCheck, formatVerifyResult } from './verify.js';
+import {
+  enumerateUiElements, findElements, elementCenter, describeElement,
+  buildUiInstruction, buildUiTreeTool, buildClickElementTool,
+} from './ui.js';
 
 interface RunResult {
   text: string;
@@ -49,6 +53,8 @@ export interface SdkModeOptions {
   recorder?: MacroRecorder | undefined;
   /** When set, the agent gets a `verify` tool + a self-verification instruction (`hands run --verify`): it must prove success with a real check before claiming done. */
   verify?: boolean | undefined;
+  /** When set, the agent gets `ui_tree` + `click_element` tools to target controls by name/role via the OS accessibility tree (`hands run --ui`). Windows-only for now. */
+  ui?: boolean | undefined;
   /** When set, replaces the default OS-aware system prompt with this exact string. Used by --persona / --system-prompt to swap in custom prompt content. */
   systemPromptOverride?: string | undefined;
   /** TEST HOOK — fake Anthropic client so the agent loop is testable without an API key. Combine with dryRun + testScreen. */
@@ -67,7 +73,8 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
   const { width: realWidth, height: realHeight } = opts.testScreen ?? await getScreenSize();
   const model = config.model;
   const systemPrompt = (opts.systemPromptOverride ?? buildSdkSystemPrompt(normalizePlatform(process.platform)))
-    + (opts.verify ? `\n\n${buildVerifyInstruction(true)}` : '');
+    + (opts.verify ? `\n\n${buildVerifyInstruction(true)}` : '')
+    + (opts.ui ? `\n\n${buildUiInstruction()}` : '');
 
   // Calculate the display dimensions we tell Claude (matches screenshot size)
   const scaleFactor = Math.min(1.0, SCREENSHOT_MAX_WIDTH / realWidth);
@@ -159,6 +166,11 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
   if (opts.verify) {
     tools.push(buildVerifyTool() as unknown as Anthropic.Beta.BetaTool);
   }
+  // Semantic UI targeting: click controls by name/role via the accessibility tree.
+  if (opts.ui) {
+    tools.push(buildUiTreeTool() as unknown as Anthropic.Beta.BetaTool);
+    tools.push(buildClickElementTool() as unknown as Anthropic.Beta.BetaTool);
+  }
 
   const messages: Anthropic.Beta.BetaMessageParam[] = [
     {
@@ -240,6 +252,10 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
             result = await executeFindFiles(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
           } else if (block.name === 'verify') {
             result = await executeVerify(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
+          } else if (block.name === 'ui_tree') {
+            result = await executeUiTree(block.input as Record<string, unknown>);
+          } else if (block.name === 'click_element') {
+            result = await executeClickElement(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
           } else {
             result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun, guard: opts.guard, recorder: opts.recorder });
           }
@@ -576,6 +592,71 @@ async function executeVerify(
     ...(outcome.ok ? {} : { error: `exit ${outcome.exitCode}` }),
   });
   return [{ type: 'text', text: formatVerifyResult(claim, outcome) }];
+}
+
+/**
+ * Dispatcher for `ui_tree` (--ui). Enumerates the active window's named
+ * controls from the OS accessibility tree — a semantic, screenshot-free view
+ * the agent can target by name. Read-only; audit-logged.
+ */
+async function executeUiTree(input: Record<string, unknown>): Promise<Array<{ type: string; text?: string }>> {
+  output.action('ui_tree', 'reading active window');
+  const start = Date.now();
+  try {
+    let els = await enumerateUiElements();
+    const filter = typeof input['filter'] === 'string' ? input['filter'].toLowerCase() : '';
+    if (filter) els = els.filter((e) => e.name.toLowerCase().includes(filter));
+    await appendAudit({ tool: 'ui_tree', durationMs: Date.now() - start, ok: true });
+    if (els.length === 0) {
+      return [{ type: 'text', text: 'No named controls found in the active window. It may not expose an accessibility tree — fall back to a screenshot.' }];
+    }
+    return [{ type: 'text', text: `Active window controls (${els.length}):\n${els.slice(0, 60).map(describeElement).join('\n')}` }];
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await appendAudit({ tool: 'ui_tree', durationMs: Date.now() - start, ok: false, error: msg.slice(0, 200) });
+    return [{ type: 'text', text: `ui_tree unavailable: ${msg}. Use a screenshot instead.` }];
+  }
+}
+
+/**
+ * Dispatcher for `click_element` (--ui). Resolves a control by name/role from
+ * the accessibility tree and clicks its center — no screenshot, no pixel
+ * coordinates. Returns the candidates when there's no unambiguous match.
+ */
+async function executeClickElement(
+  input: Record<string, unknown>,
+  opts: { dryRun?: boolean | undefined } = {},
+): Promise<Array<{ type: string; text?: string }>> {
+  const name = typeof input['name'] === 'string' ? input['name'] : '';
+  const role = typeof input['role'] === 'string' ? input['role'] : undefined;
+  if (!name.trim()) {
+    return [{ type: 'text', text: "click_element needs a `name` — the control's visible label." }];
+  }
+  output.action('click_element', `${name}${role ? ` [${role}]` : ''}`);
+  const start = Date.now();
+  try {
+    const els = await enumerateUiElements();
+    const matches = findElements(els, { name, ...(role ? { role } : {}) });
+    if (matches.length === 0) {
+      await appendAudit({ tool: 'click_element', args: { name, role }, durationMs: Date.now() - start, ok: false, error: 'no match' });
+      const available = els.slice(0, 20).map(describeElement).join('\n');
+      return [{ type: 'text', text: `No control matching "${name}"${role ? ` [${role}]` : ''}. Available controls:\n${available || '(none — try a screenshot)'}` }];
+    }
+    const target = matches[0]!;
+    const { x, y } = elementCenter(target);
+    if (opts.dryRun) {
+      await appendAudit({ tool: 'click_element', args: { name: target.name, role: target.role }, durationMs: 0, ok: true, dryRun: true });
+      return [{ type: 'text', text: `[dry-run] would click ${describeElement(target)} at (${x}, ${y}).` }];
+    }
+    await mouseClick(x, y, 'left');
+    await appendAudit({ tool: 'click_element', args: { name: target.name, role: target.role }, durationMs: Date.now() - start, ok: true });
+    const note = matches.length > 1 ? ` (${matches.length} matched; clicked the best.)` : '';
+    return [{ type: 'text', text: `Clicked ${describeElement(target)} at (${x}, ${y}).${note} Verify with a screenshot or ui_tree.` }];
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await appendAudit({ tool: 'click_element', args: { name, role }, durationMs: Date.now() - start, ok: false, error: msg.slice(0, 200) });
+    return [{ type: 'text', text: `click_element failed: ${msg}` }];
+  }
 }
 
 /**

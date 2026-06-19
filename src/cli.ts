@@ -68,6 +68,7 @@ program
   .option('--warden', 'Route each action through warden\'s policy firewall (blocks black, holds red for approval). Forces SDK mode. Needs @askalf/warden installed (or HANDS_WARDEN_PATH).')
   .option('--record <name>', 'Crystallize this run into a deterministic macro of <name> — replay it later free (no LLM) with `hands play <name>`. Forces SDK mode.')
   .option('--verify', 'Make the agent prove success with a real check before claiming done (states a criterion, then verifies it). Works in both modes.')
+  .option('--ui', 'Give the agent semantic UI tools (ui_tree / click_element) to target controls by name via the accessibility tree instead of pixels. Forces SDK mode; Windows-only for now.')
   .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
   .option('--persona <name>', 'Use a named persona (bundled: minimal, thorough, concise, security-aware) or ~/.hands/personas/<name>.md. SDK mode only.')
   .option('--system-prompt <path>', 'Path to a system-prompt file. Bypasses --persona. SDK mode only.')
@@ -107,6 +108,7 @@ program
         guard: opts.guard,
         warden: opts.warden,
         verify: opts.verify,
+        ui: opts.ui,
         noDario: opts.dario === false,
         params: setParsed.params,
         ...(opts.persona ? { persona: opts.persona } : {}),
@@ -160,6 +162,7 @@ program
       guard: opts.guard,
       warden: opts.warden,
       verify: opts.verify,
+      ui: opts.ui,
       noDario: opts.dario === false,
       continueSession: opts.continue,
       once,
