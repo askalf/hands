@@ -232,7 +232,7 @@ hands is a high-trust tool: **the agent has shell, keyboard, mouse, and screensh
 - **Computer-use beta cost.** SDK-mode without dario charges per token *including screenshots* — every screenshot the model takes adds vision tokens. A few-dollar task is plausible at direct API rates. The shell-first system prompt suppresses unnecessary screenshots, but a task that genuinely needs visual verification will spend.
 - **Voice transcription.** whisper.cpp runs entirely local — no audio leaves the machine. Recordings are written to a temp file during transcription and unlinked immediately after. SoX / arecord are invoked via `execFile` with argv arrays (not shell strings) so input filenames can't be injected.
 
-### Recent hardening (v0.4.2 → v0.6.0)
+### Security hardening
 
 - The bash hard-block list is **enforced in Claude Login mode** via a PreToolUse hook injected into the claude child — hooks fire and deny even under `--dangerously-skip-permissions`. Blocked attempts are audit-logged (v0.6.0).
 - Claude Login mode gained a full audit trail from the stream-json event feed; entries carry `mode: 'cli'` and the same secret scrubbing as SDK entries (v0.6.0).
@@ -668,6 +668,8 @@ Part of **[Own Your Stack](https://github.com/askalf)** — open tools for ownin
 - **[warden](https://github.com/askalf/warden)** — own your agent security
 - **[canon](https://github.com/askalf/canon)** — own your agent skills
 - **[keeper](https://github.com/askalf/keeper)** — own your agent secrets
+- **[cordon](https://github.com/askalf/cordon)** — own your prompts
+- **[picket](https://github.com/askalf/picket)** — own your agent browser
 - **[claude-sync](https://github.com/askalf/claude-sync)** — own your sessions
 - **[amnesia](https://github.com/askalf/amnesia)** — own your search
 - **[askalf platform](https://askalf.org)** — own your operation
