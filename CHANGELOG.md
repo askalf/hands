@@ -11,6 +11,19 @@ checklist.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-19
+
+Watchers. hands has been request→response: you ask, it acts. `hands watch` makes it **reactive** — it fires a task (or a free recorded macro) when something happens: a new file appears, the clipboard changes and matches a pattern, a command newly succeeds, or a timer ticks. A local automation daemon, $0 when paired with a macro. Minor-version bump for the new `watch` command.
+
+PR in this release: #92 (watchers).
+
+### Added — `hands watch`: event-driven computer use
+
+- **Triggers** (pick one): **`--on-file <glob>`** fires when a *new* file matching the glob appears (pre-existing files are the baseline, not a trigger); **`--on-clipboard <regex>`** fires when the clipboard changes *and* matches; **`--on-command <cmd>`** fires on the rising edge of a command exiting 0 (not while it keeps passing); **`--every <interval>`** fires on a timer (`30s` / `5m` / `2h`).
+- **Actions** (pick one): **`--do "<task>"`** runs a hands task with the model (the trigger context is substituted in — `{{file}}`, `{{clip}}`, `{{match}}`), or **`--play <macro>`** replays a recorded macro with **zero LLM**. The watch+crystallize pairing is a free, deterministic reaction to an event.
+- **Controls**: `--interval <ms>` poll rate, `--once` (fire once and exit), `--max <n>` (stop after N fires). Probe errors are logged and the loop continues; a failing action doesn't kill the watcher.
+- New module `src/watch.ts` — the pure trigger engine (`parseInterval`, `newItems`, `matchRegex`, `describeTrigger`, and a `WatchEngine` whose I/O probes are injected so every change-detection edge is testable) — plus `src/watch-run.ts` (real fs / clipboard / process probes + the poll/fire loop). Zero new dependencies. 8 new tests in `test/watch.test.mjs` (305 total across 30 files) covering the interval parser, set-diff, regex match, and each trigger's change-detection (new-file-only, clipboard change+match, command rising edge, interval) via fake probes — plus a verified end-to-end watch that fired on a command and played a macro with no LLM.
+
 ## [0.12.0] - 2026-06-19
 
 Self-verifying tasks. Most computer-use agents fire-and-forget — they do the work and *tell* you it worked. `hands run --verify` makes the agent **prove** it: it commits to a concrete success criterion and runs a real check before claiming done. In SDK mode the check runs through a dedicated `verify` tool whose exit code is ground truth (not the model's self-assessment); in Claude Login mode the same instruction drives its built-in shell. Works in both modes — no SDK-only tax on the $0 path. Minor-version bump for the new `--verify` flag.
