@@ -325,6 +325,8 @@ hands run --once "<task>"   # one task, no interactive loop — for scripts and 
 hands run --json "<task>"   # one JSON result line on stdout (implies --once)
 hands run @<recipe>         # run a saved recipe (see Recipes below)
 hands run @<recipe> --set k=v   # fill the recipe's {{k}} placeholders
+hands run --record <name> "<task>"   # crystallize the run into a deterministic macro
+hands play <name>           # replay a recorded macro — zero LLM, free (see Crystallize)
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
@@ -381,6 +383,29 @@ hands run @greet --set name=World          # → "open notepad and type World"
 A recipe with an unfilled, defaultless `{{param}}` fails fast — before any model call — telling you the exact `--set` to add. Substitution is pure text interpolation into the prompt; it never reaches a shell.
 
 Multi-step recipes drive the same `run()` per step — step 1 starts a Claude Login session, the rest resume it via `--continue`, and the recipe halts the moment a step doesn't complete cleanly (exit code 2). Every guardrail, audit entry, persona, and the dario auto-route apply exactly as a hand-run task. Because steps chain via session continuity (Claude Login only), a multi-step recipe in SDK mode — or under `--dry-run` — is refused up front; single-step recipes run in either mode. Recipe names are validated as a single safe path segment before they become a filename, so `@../escape` can't traverse out of the recipes dir.
+
+### Crystallize — record once, replay free forever
+
+A recipe re-runs the *prompt* (and pays the LLM each time). A **macro** re-runs the *result* — for free. `hands run --record` (v0.11.0) captures a successful run's effectful tool calls, and `hands play` replays them with **zero model calls**: instant, deterministic, $0. No other computer-use tool compiles an AI run into reusable deterministic automation.
+
+```bash
+# Do it once, with the model — and record what actually fired
+hands run --record nightly "pull main, run the tests, and write the result to ~/ci.log"
+
+# Replay it forever — no LLM, instant, free
+hands play nightly
+hands play nightly --dry-run        # preview the steps
+hands play nightly --set branch=dev # fill a {{branch}} you hand-added
+
+# Or have hands hand you the script it wrote
+hands play nightly --export nightly.ps1   # .ps1 on Windows, .sh elsewhere
+
+hands macro list / show nightly / rm nightly
+```
+
+- **Only effectful steps are recorded** — bash, file edits, clicks, keystrokes. Screenshots, `read_page`, `find_files`, cursor moves and `view` are skipped. Bash and file edits are the deterministic backbone (bash replays behind the same guardrail blocklist); coordinate clicks replay best-effort, scaled to the current screen.
+- Capture happens at the SDK dispatch site (like `--guard`/`--warden`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
+- **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
 
 ### Guarded mode
 
@@ -466,6 +491,8 @@ src/
   personas.ts       # named system-prompt overrides (--persona)
   recipes.ts        # recipe model — parse/serialize/params + ~/.hands/recipes CRUD
   recipe-run.ts     # `hands run @name` — per-step orchestrator over run()
+  macros.ts         # crystallize model — recorder, params, export-to-script + ~/.hands/macros CRUD
+  macro-run.ts      # `hands play` — deterministic zero-LLM replay executor
   audit-replay.ts   # hands audit list / show / replay
   system-prompt.ts  # OS-aware system-prompt builders (win32 / darwin / linux)
   platform/         # screenshot / mouse / keyboard / screen-info per platform + claude CLI resolver
@@ -567,7 +594,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (276 tests across 27 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (289 tests across 28 test files).
 
 ---
 

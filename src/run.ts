@@ -9,6 +9,7 @@ import { resolvePersona, resolveSystemPromptFile, type PersonaResolution } from 
 import { loadLastSession } from './util/session-state.js';
 import type { GuardController } from './util/guard.js';
 import type { WardenGate } from './util/warden.js';
+import type { MacroRecorder } from './macros.js';
 import * as output from './util/output.js';
 
 export interface RunOptions {
@@ -19,6 +20,8 @@ export interface RunOptions {
   guard?: boolean;
   /** When set, every tool call is classified by warden's policy firewall before dispatch (`hands run --warden`). SDK-mode gate like --guard. Mutually exclusive with --dry-run / --json / --continue / --guard. */
   warden?: boolean;
+  /** Crystallize: record this run's effectful tool calls into a deterministic macro of this name (`hands run --record <name>`). SDK mode only (capture is at the dispatch site). */
+  record?: string;
   /** When true, skip the dario auto-detect probe at startup. Use when the operator wants explicit api.anthropic.com routing despite dario being available. */
   noDario?: boolean;
   /** Named persona (bundled or ~/.hands/personas/<name>.md). Replaces the default OS-aware system prompt with the persona's text. SDK mode only. */
@@ -110,6 +113,17 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
   }
   if (options.warden && options.continueSession) {
     output.error('--warden and --continue are mutually exclusive: warden forces SDK mode, --continue is Claude Login only.');
+    process.exit(1);
+  }
+  // --record captures at the SDK dispatch site (Claude Login runs tools in
+  // its child, where hands can't see full inputs), and there's nothing to
+  // capture from a stubbed run.
+  if (options.record && options.dryRun) {
+    output.error('--record and --dry-run are mutually exclusive: a stubbed run executes nothing to crystallize.');
+    process.exit(1);
+  }
+  if (options.record && options.continueSession) {
+    output.error('--record and --continue are mutually exclusive: recording is SDK-mode, --continue is Claude Login only.');
     process.exit(1);
   }
 
@@ -230,6 +244,17 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
     config.authMode = 'api_key';
   }
 
+  // --record captures full tool inputs at the dispatch site — SDK mode only.
+  if (options.record && config.authMode === 'oauth') {
+    if (!hasSdkCredentials(config.apiKey)) {
+      output.error('--record runs in SDK mode, and no API key is configured.');
+      output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --record.');
+      process.exit(1);
+    }
+    output.warn('--record runs in SDK mode (capture is at the dispatch site). Forcing SDK mode; route through dario to keep it $0.');
+    config.authMode = 'api_key';
+  }
+
   // Auto-detect auth mode
   if (config.authMode === 'oauth') {
     const hasClaude = await commandExists('claude');
@@ -309,13 +334,43 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
           `warden firewall active — ${interactive ? 'red-tier actions prompt for approval' : 'unattended: red-tier fails closed'}. Policy: ${wardenPaths().policy}`,
         );
       }
+      let recorder: MacroRecorder | undefined;
+      const recordName = options.record;
+      if (recordName) {
+        const { MacroRecorder, isValidMacroName, loadMacro } = await import('./macros.js');
+        if (!isValidMacroName(recordName)) {
+          guardHandle?.close();
+          output.error(`Invalid macro name "${recordName}". Use letters, digits, dashes, and underscores.`);
+          process.exit(1);
+        }
+        let exists = false;
+        try { await loadMacro(recordName); exists = true; } catch { /* not found is what we want */ }
+        if (exists) {
+          guardHandle?.close();
+          output.error(`Macro "${recordName}" already exists. Delete it first (hands macro rm ${recordName}) or pick another name.`);
+          process.exit(1);
+        }
+        recorder = new MacroRecorder();
+        output.info(`recording → macro "${recordName}" — effectful steps will crystallize into a deterministic, $0 replay.`);
+      }
       try {
         const result = await runSdkMode(prompt, config, {
           dryRun: options.dryRun,
           ...(personaResolution ? { systemPromptOverride: personaResolution.prompt } : {}),
           ...(options.guard && guardHandle ? { guard: guardHandle.guard } : {}),
           ...(wardenGate ? { warden: wardenGate } : {}),
+          ...(recorder ? { recorder } : {}),
         });
+        if (recordName && recorder) {
+          if (recorder.steps.length > 0) {
+            const { saveMacro } = await import('./macros.js');
+            const path = await saveMacro({ name: recordName, prompt, platform: process.platform, createdAt: Date.now(), steps: recorder.steps });
+            output.success(`crystallized ${recorder.steps.length} step${recorder.steps.length === 1 ? '' : 's'} → ${path}`);
+            output.info(`replay free (no LLM): hands play ${recordName}  ·  export: hands macro export ${recordName} <file>`);
+          } else {
+            output.warn(`nothing effectful to record — macro "${recordName}" not saved.`);
+          }
+        }
         if (wardenGate) output.info(wardenGate.summary());
         else if (guardHandle) output.info(guardHandle.guard.summary());
         if (options.json) {
