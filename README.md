@@ -328,6 +328,7 @@ hands run @<recipe> --set k=v   # fill the recipe's {{k}} placeholders
 hands run --record <name> "<task>"   # crystallize the run into a deterministic macro
 hands play <name>           # replay a recorded macro — zero LLM, free (see Crystallize)
 hands run "<prompt>" --verify        # agent proves success with a real check before claiming done
+hands watch --on-file <glob> --do "<task>"   # fire a task when a file/clipboard/command/timer event hits
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
@@ -407,6 +408,25 @@ hands macro list / show nightly / rm nightly
 - **Only effectful steps are recorded** — bash, file edits, clicks, keystrokes. Screenshots, `read_page`, `find_files`, cursor moves and `view` are skipped. Bash and file edits are the deterministic backbone (bash replays behind the same guardrail blocklist); coordinate clicks replay best-effort, scaled to the current screen.
 - Capture happens at the SDK dispatch site (like `--guard`/`--warden`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
 - **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
+
+### Watchers — reactive computer use
+
+hands is normally request→response. `hands watch` (v0.13.0) makes it **reactive**: fire a task — or a free recorded macro — when something happens. A local automation daemon.
+
+```bash
+# When a PDF lands in Downloads, rename it by its title (LLM task)
+hands watch --on-file ~/Downloads/*.pdf --do "rename {{file}} by its title, move to ~/Papers"
+
+# When the clipboard holds a ticket id, open it — replaying a free macro ($0)
+hands watch --on-clipboard "JIRA-\d+" --play open-ticket
+
+# When the build goes green, deploy — once
+hands watch --on-command "gh run list -L1 --json conclusion -q '.[0].conclusion==\"success\"'" --do "deploy" --once
+```
+
+- **Triggers** (one): `--on-file <glob>` (a *new* file — pre-existing ones are the baseline), `--on-clipboard <regex>` (changed *and* matching), `--on-command <cmd>` (rising edge of exit 0), `--every <interval>` (`30s`/`5m`/`2h`).
+- **Actions** (one): `--do "<task>"` runs the model (trigger context substituted: `{{file}}`/`{{clip}}`/`{{match}}`), or `--play <macro>` replays a macro with **zero LLM** — a free, deterministic reaction to an event.
+- `--interval <ms>` poll rate, `--once`, `--max <n>`. A probe error or a failing action is logged; the watcher keeps going.
 
 ### Self-verifying tasks
 
@@ -510,6 +530,8 @@ src/
   macros.ts         # crystallize model — recorder, params, export-to-script + ~/.hands/macros CRUD
   macro-run.ts      # `hands play` — deterministic zero-LLM replay executor
   verify.ts         # --verify — self-verification prompt + deterministic `verify` tool
+  watch.ts          # `hands watch` — pure reactive trigger engine (file/clipboard/command/interval)
+  watch-run.ts      # watch probes (fs/clipboard/process) + the poll/fire loop
   audit-replay.ts   # hands audit list / show / replay
   system-prompt.ts  # OS-aware system-prompt builders (win32 / darwin / linux)
   platform/         # screenshot / mouse / keyboard / screen-info per platform + claude CLI resolver
@@ -611,7 +633,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (297 tests across 29 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (305 tests across 30 test files).
 
 ---
 

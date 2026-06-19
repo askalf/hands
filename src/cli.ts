@@ -10,6 +10,7 @@ import { parseOverrides } from './util/cli-overrides.js';
 import { isWhisperInstalled, setupWhisper } from './voice/index.js';
 import { runDoctor, renderDoctorText, renderDoctorJson, exitCodeFor } from './doctor.js';
 import { parseRecipeRef, parseSetPairs } from './recipes.js';
+import type { WatchTrigger, WatchAction } from './watch.js';
 import * as output from './util/output.js';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -586,6 +587,71 @@ macroCmd
       output.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     }
+  });
+
+// ── watch (reactive triggers) ───────────────────────────────────────
+program
+  .command('watch')
+  .description('Fire a task or macro when something happens — a file appears, the clipboard matches, a command succeeds, or a timer ticks.')
+  .option('--on-file <glob>', 'Fire when a new file matching <glob> appears (e.g. ~/Downloads/*.pdf). Substitutes {{file}}.')
+  .option('--on-clipboard <regex>', 'Fire when the clipboard changes and matches <regex>. Substitutes {{clip}} and {{match}}.')
+  .option('--on-command <cmd>', 'Fire when <cmd> newly exits 0 (rising edge).')
+  .option('--every <interval>', 'Fire on a timer: 30s, 5m, 2h (or bare ms).')
+  .option('--do <task>', 'Run this hands task on each fire (LLM). {{file}}/{{clip}}/{{match}} are substituted in.')
+  .option('--play <macro>', 'Replay this recorded macro on each fire — zero LLM.')
+  .option('--interval <ms>', 'Poll interval in ms for file/clipboard/command triggers (default 2000).', '2000')
+  .option('--max <n>', 'Stop after N fires.')
+  .option('--once', 'Fire once, then exit.')
+  .option('--no-dario', 'Skip the dario auto-detect for --do task actions.')
+  .action(async (opts) => {
+    const { parseInterval } = await import('./watch.js');
+
+    const triggers: WatchTrigger[] = [];
+    let intervalFromEvery: number | undefined;
+    if (opts.onFile) triggers.push({ kind: 'file', glob: String(opts.onFile) });
+    if (opts.onClipboard) triggers.push({ kind: 'clipboard', pattern: String(opts.onClipboard) });
+    if (opts.onCommand) triggers.push({ kind: 'command', command: String(opts.onCommand) });
+    if (opts.every !== undefined) {
+      const ms = parseInterval(String(opts.every));
+      if (ms === null) {
+        output.error(`Invalid --every "${opts.every}". Use 30s, 5m, 2h, or a bare number of ms.`);
+        process.exit(1);
+      }
+      intervalFromEvery = ms;
+      triggers.push({ kind: 'interval' });
+    }
+    if (triggers.length !== 1) {
+      output.error('Pick exactly one trigger: --on-file / --on-clipboard / --on-command / --every.');
+      process.exit(1);
+    }
+
+    const actions: WatchAction[] = [];
+    if (opts.do) actions.push({ kind: 'task', task: String(opts.do) });
+    if (opts.play) actions.push({ kind: 'macro', name: String(opts.play) });
+    if (actions.length !== 1) {
+      output.error('Pick exactly one action: --do "<task>" or --play <macro>.');
+      process.exit(1);
+    }
+
+    let max: number | undefined;
+    if (opts.max !== undefined) {
+      max = parseInt(String(opts.max), 10);
+      if (!Number.isInteger(max) || max <= 0) {
+        output.error(`--max must be a positive integer, got "${opts.max}".`);
+        process.exit(1);
+      }
+    }
+    const pollMs = parseInterval(String(opts.interval)) ?? 2000;
+    const trigger = triggers[0]!;
+    const intervalMs = trigger.kind === 'interval' ? (intervalFromEvery ?? pollMs) : pollMs;
+
+    const { runWatch } = await import('./watch-run.js');
+    await runWatch(trigger, actions[0]!, {
+      intervalMs,
+      ...(max ? { max } : {}),
+      once: !!opts.once,
+      noDario: opts.dario === false,
+    });
   });
 
 program
