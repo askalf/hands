@@ -65,6 +65,7 @@ program
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .option('--guard', 'Pause for [a]llow / [d]eny / [A]lways / [e]dit / [q]uit before every state-changing action. Forces SDK mode (like --dry-run).')
   .option('--warden', 'Route each action through warden\'s policy firewall (blocks black, holds red for approval). Forces SDK mode. Needs @askalf/warden installed (or HANDS_WARDEN_PATH).')
+  .option('--record <name>', 'Crystallize this run into a deterministic macro of <name> — replay it later free (no LLM) with `hands play <name>`. Forces SDK mode.')
   .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
   .option('--persona <name>', 'Use a named persona (bundled: minimal, thorough, concise, security-aware) or ~/.hands/personas/<name>.md. SDK mode only.')
   .option('--system-prompt <path>', 'Path to a system-prompt file. Bypasses --persona. SDK mode only.')
@@ -159,6 +160,7 @@ program
       continueSession: opts.continue,
       once,
       json: opts.json,
+      ...(opts.record ? { record: opts.record } : {}),
       ...(opts.persona ? { persona: opts.persona } : {}),
       ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
       ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
@@ -474,6 +476,113 @@ recipeCmd
       process.exit(1);
     }
     console.log(recipePath(name));
+  });
+
+// ── play / macro (crystallize) ──────────────────────────────────────
+program
+  .command('play <name>')
+  .description('Replay a recorded macro deterministically — zero LLM calls, instant, free. (Record with `hands run --record <name>`.)')
+  .option('--set <pair>', 'Fill a macro {{param}}: --set key=value (repeatable).', collect, [])
+  .option('--dry-run', 'Print the steps without executing them.')
+  .option('--export <file>', 'Compile the macro to a .sh / .ps1 script at <file> instead of replaying it.')
+  .option('--stop-on-error', 'Halt on the first failing step (default: keep going).')
+  .action(async (name, opts) => {
+    const setParsed = parseSetPairs(opts.set);
+    if (!setParsed.ok) {
+      setParsed.errors.forEach((e) => output.error(e));
+      process.exit(1);
+    }
+    if (opts.export) {
+      const { loadMacro, macroToScript } = await import('./macros.js');
+      const { writeFileSync } = await import('node:fs');
+      try {
+        const macro = await loadMacro(name);
+        const { language, script, scriptable, manual } = macroToScript(macro);
+        writeFileSync(opts.export, script, { mode: 0o755 });
+        output.success(`exported "${name}" → ${opts.export}  (${language}: ${scriptable} scriptable, ${manual} manual)`);
+        if (manual > 0) output.warn(`${manual} GUI step${manual === 1 ? '' : 's'} (clicks/keystrokes) aren't portably scriptable — commented out. Use \`hands play ${name}\` for full fidelity.`);
+      } catch (err) {
+        output.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+      return;
+    }
+    const { playMacro } = await import('./macro-run.js');
+    const res = await playMacro(name, {
+      params: setParsed.params,
+      dryRun: !!opts.dryRun,
+      stopOnError: !!opts.stopOnError,
+    });
+    if (res.failed > 0) process.exitCode = 2;
+  });
+
+const macroCmd = program
+  .command('macro')
+  .description('Manage recorded macros (record with `hands run --record <name>`, replay with `hands play <name>`)');
+
+macroCmd
+  .command('list')
+  .description('List recorded macros with step count and recording date.')
+  .option('--json', 'Emit as a JSON array.')
+  .action(async (opts) => {
+    const { listMacros } = await import('./macros.js');
+    const macros = await listMacros();
+    if (opts.json) {
+      console.log(JSON.stringify(macros));
+      return;
+    }
+    output.header(`Macros (${macros.length})`);
+    if (macros.length === 0) {
+      output.info('None yet. Record one: hands run --record <name> "<task>"');
+      return;
+    }
+    const w = Math.max(8, ...macros.map((m) => m.name.length));
+    for (const m of macros) {
+      const when = m.createdAt ? new Date(m.createdAt).toISOString().slice(0, 10) : '—';
+      const n = m.steps.length;
+      console.log(`  ${m.name.padEnd(w)}  ${`${n} step${n === 1 ? '' : 's'}`.padEnd(9)}  ${when}${m.prompt ? `  — ${m.prompt.slice(0, 50)}` : ''}`);
+    }
+    console.log();
+    output.info('Replay: hands play <name>  ·  script: hands play <name> --export <file>');
+  });
+
+macroCmd
+  .command('show <name>')
+  .description('Show a macro — its steps, source prompt, and on-disk path.')
+  .option('--json', 'Emit the parsed macro as JSON.')
+  .action(async (name, opts) => {
+    const { loadMacro, macroPath, previewStep } = await import('./macros.js');
+    try {
+      const macro = await loadMacro(name);
+      if (opts.json) {
+        console.log(JSON.stringify(macro, null, 2));
+        return;
+      }
+      output.header(`macro: ${macro.name}`);
+      if (macro.prompt) console.log(chalk.dim('From:'), macro.prompt);
+      if (macro.platform) console.log(chalk.dim('Platform:'), macro.platform);
+      if (macro.createdAt) console.log(chalk.dim('Recorded:'), new Date(macro.createdAt).toISOString());
+      console.log(chalk.dim('File:'), macroPath(name));
+      console.log();
+      macro.steps.forEach((s, i) => console.log(`  ${chalk.dim(`${i + 1}.`)} ${previewStep(s)}`));
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+macroCmd
+  .command('rm <name>')
+  .description('Delete a recorded macro.')
+  .action(async (name) => {
+    const { deleteMacro } = await import('./macros.js');
+    try {
+      await deleteMacro(name);
+      output.success(`deleted macro "${name}"`);
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
   });
 
 program

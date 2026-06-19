@@ -11,6 +11,20 @@ checklist.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-19
+
+Crystallize. A computer-use task normally costs LLM calls every single time you run it. v0.11.0 makes hands the first to compile a successful AI run into a **deterministic, zero-LLM macro** — record once, replay free forever. Shell-first tasks (hands' bias) crystallize into clean scripts you can `--export` as `.sh` / `.ps1`: the AI does the task once, then hands you the automation. Minor-version bump for the new `--record` flag, the `play` command, and the `macro` group.
+
+PR in this release: #90 (crystallize).
+
+### Added — `hands run --record <name>` → `hands play <name>`: learn once, run free forever
+
+- **`hands run --record <name> "<task>"`** runs the task with the model AND captures every *effectful* tool call (bash, file edits, clicks, keystrokes) into a macro at `~/.hands/macros/<name>.json`. Pure reads — screenshots, `read_page`, `find_files`, cursor moves, editor `view` — are skipped; only what changes state is recorded. The capture is full-fidelity (un-truncated input), at the same SDK dispatch site `--guard`/`--warden` gate, so `--record` forces SDK mode (route through dario for $0). The name is validated and checked for collision **before** the run, so you never spend a task only to fail the save.
+- **`hands play <name>`** re-executes the recorded sequence with **zero model calls** — instant, free, deterministic. Bash and file edits are the deterministic backbone (bash runs behind the same guardrail blocklist; edits go straight through `node:fs`); coordinate clicks replay best-effort, scaled to the current screen. `--set key=value` fills `{{params}}` you've hand-added, `--dry-run` previews, `--stop-on-error` halts on the first failure (default: continue). Every replayed step is audit-logged.
+- **`hands play <name> --export <file>`** compiles the macro into a runnable script — PowerShell on Windows (where hands' bash tool runs PowerShell), POSIX `sh` elsewhere. Bash steps become commands, file-creates become a heredoc / `Set-Content`, and GUI steps become commented `# [manual]` placeholders. For a shell-first task that's the whole thing: a clean script the AI wrote for you.
+- **`hands macro list / show / rm`** manage the library. Macros are written `0600` in the `0700` `~/.hands/macros/` dir (they can carry literal typed text), names are single safe path segments (no `@../` traversal).
+- New modules: `src/macros.ts` (pure model — validation, the recordable filter, `MacroRecorder`, param substitution reusing recipes' pure helper, the export-to-script compiler, plus fs CRUD) and `src/macro-run.ts` (the deterministic executor). Zero new dependencies. 13 new tests in `test/macros.test.mjs` (289 total across 28 files) covering name/traversal validation, the recordable filter, the recorder, param substitution, the `.sh`/`.ps1` export compiler, step preview, and the CRUD round-trip — plus a verified end-to-end `play` that executed a hand-authored macro (2 steps) with no LLM and produced the expected file.
+
 ## [0.10.0] - 2026-06-19
 
 warden integration. v0.9.0 added a human gate (`--guard`); v0.10.0 adds a *policy* gate — `hands run --warden` routes every SDK-mode tool call through [warden](https://github.com/askalf/warden), the Own Your Stack agent-security firewall, before it executes. The same guard that fronts Claude Code, the platform forge, and MCP servers now fronts hands' computer-use loop, writing to the same tamper-evident audit. Minor-version bump for the new flag.

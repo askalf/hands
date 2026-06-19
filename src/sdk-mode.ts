@@ -17,6 +17,7 @@ import { readPage } from './tools/read-page.js';
 import { findFiles } from './tools/find-files.js';
 import { classifyToolUse, previewToolUse, GuardAbort, type GuardController } from './util/guard.js';
 import type { WardenGate } from './util/warden.js';
+import type { MacroRecorder } from './macros.js';
 
 interface RunResult {
   text: string;
@@ -43,6 +44,8 @@ export interface SdkModeOptions {
   guard?: GuardController | undefined;
   /** When set, every tool call is classified by warden's policy firewall before dispatch (`hands run --warden`): black is blocked, red is held for the operator, green/yellow allowed. Mutually exclusive with dryRun / guard. */
   warden?: WardenGate | undefined;
+  /** When set, every successful effectful tool call (bash / file edit / click / keystroke) is captured for crystallization into a deterministic macro (`hands run --record <name>`). */
+  recorder?: MacroRecorder | undefined;
   /** When set, replaces the default OS-aware system prompt with this exact string. Used by --persona / --system-prompt to swap in custom prompt content. */
   systemPromptOverride?: string | undefined;
   /** TEST HOOK — fake Anthropic client so the agent loop is testable without an API key. Combine with dryRun + testScreen. */
@@ -226,7 +229,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
           } else if (block.name === 'find_files') {
             result = await executeFindFiles(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
           } else {
-            result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun, guard: opts.guard });
+            result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun, guard: opts.guard, recorder: opts.recorder });
           }
         } catch (err) {
           // [q]uit at the guard prompt ends the whole run, not just this call.
@@ -288,7 +291,7 @@ async function executeComputerAction(
   toolName: string,
   input: Record<string, unknown>,
   scaleFactor: number,
-  opts: { dryRun?: boolean | undefined; guard?: GuardController | undefined } = {},
+  opts: { dryRun?: boolean | undefined; guard?: GuardController | undefined; recorder?: MacroRecorder | undefined } = {},
 ): Promise<Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>> {
   let effInput = input;
   let action = effInput['action'] as string | undefined;
@@ -329,6 +332,8 @@ async function executeComputerAction(
   try {
     const result = await executeComputerActionInner(toolName, effInput, scaleFactor);
     await appendAudit({ tool: toolName, action, args: auditArgs, durationMs: Date.now() - start, ok: true });
+    // Crystallize: capture the just-succeeded effectful call for deterministic replay.
+    opts.recorder?.record(toolName, action, effInput);
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
