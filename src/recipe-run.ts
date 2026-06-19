@@ -62,6 +62,11 @@ export async function runRecipe(name: string, options: RecipeRunOptions = {}): P
     output.info('Guard a single-step recipe, or run the prompt directly: hands run --guard "<task>".');
     process.exit(1);
   }
+  if (multi && options.warden) {
+    output.error("--warden can't run a multi-step recipe — it forces SDK mode, which can't chain steps via session continuity.");
+    output.info('Run warden on a single-step recipe, or run the prompt directly: hands run --warden "<task>".');
+    process.exit(1);
+  }
 
   // Detect dario once for the whole recipe; later steps inherit
   // ANTHROPIC_BASE_URL from the environment and skip the probe.
@@ -90,6 +95,7 @@ export async function runRecipe(name: string, options: RecipeRunOptions = {}): P
       ...(options.json ? { json: options.json } : {}),
       ...(options.dryRun ? { dryRun: options.dryRun } : {}),
       ...(options.guard ? { guard: options.guard } : {}),
+      ...(options.warden ? { warden: options.warden } : {}),
       ...(persona ? { persona } : {}),
       ...(overrides ? { overrides } : {}),
     });

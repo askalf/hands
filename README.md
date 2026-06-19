@@ -247,6 +247,7 @@ hands is a high-trust tool: **the agent has shell, keyboard, mouse, and screensh
 
 - **Review `--dry-run` for anything you don't trust by reflex.** SDK-mode `--dry-run` runs the full agent loop with every tool call audit-logged but stubbed — no shell fires, no keys press, no mouse moves. Read `~/.hands/audit.jsonl` after; reopen for real if it looks right.
 - **Step through an untrusted task with `--guard`.** `hands run --guard` pauses before every state-changing action for allow / deny / always / edit / quit — the middle ground between dry-run and full-send, and the most direct mitigation against a prompt-injected task taking an action you didn't intend. SDK mode (forces it like dry-run).
+- **Or let a policy engine triage with `--warden`.** `hands run --warden` classifies every action through [warden](https://github.com/askalf/warden) — black blocked, red held for you, green/yellow allowed — so you only get interrupted for genuine risk (SSRF, secret-exfil, persistence, destructive commands), with a hash-chained audit. Needs `@askalf/warden`.
 - **Keep destructive operations targeted.** `hands run "delete files in ~/Downloads"` is a safer prompt than `hands run "clean up my computer"`. The narrower the scope of the prompt, the narrower the agent's reach for failure modes.
 - **Use `--dry-run` when you want a plan before any execution.** Both modes audit-log every tool call now; what dry-run adds is stubbed execution — the full agent loop with nothing firing on the host. It forces SDK mode (needs an API key or dario).
 - **Don't run hands as root / Administrator.** The agent's shell access is exactly your shell access. Running as root makes `rm -rf /` a one-prompt foot-gun the guardrails won't necessarily catch.
@@ -327,6 +328,7 @@ hands run @<recipe> --set k=v   # fill the recipe's {{k}} placeholders
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
+hands run "<prompt>" --warden         # gate each action through warden's policy firewall (SDK mode)
 hands run "<prompt>" -m claude-opus-4-6     # override model (this run only)
 hands run "<prompt>" -b 10.00         # SDK budget cap (USD); default $5.00
 hands run "<prompt>" -t 100           # max turns per task; default 50
@@ -400,6 +402,27 @@ $ hands run --guard "clean up my downloads folder"
 - **Read-only calls never prompt** — screenshot, zoom, mouse-move, `read_page`, `find_files`, and the editor's `view` pass straight through. Only actions that can change host state stop for approval.
 - Like `--dry-run`, the gate sits at the SDK dispatch site, so `--guard` runs in **SDK mode** (in Claude Login mode it forces SDK for the invocation — route through dario to keep it $0). It's mutually exclusive with `--dry-run`, `--json`, and `--continue`. Approved calls still pass the full guardrail blocklist and land in the audit log (denials too); the run ends with a `guard: N allowed, M denied` tally.
 
+### warden — policy firewall
+
+`--guard` asks *you* about every action. `hands run --warden` (v0.10.0) asks a *policy engine* — [warden](https://github.com/askalf/warden), the Own Your Stack agent-security firewall — and only escalates to you when warden flags risk. The same guard that fronts Claude Code, the platform forge, and MCP servers fronts hands' computer-use loop, writing to the same tamper-evident audit.
+
+```
+$ hands run --warden "update the repo and post the release notes"
+
+  warden: bash → green ✔ allow
+  ✔ pulled main (3 commits)
+  warden: read_page → black ✗ BLOCK — ☠ cloud-metadata / link-local SSRF (credential theft)
+  ⚠ [warden] warden BLOCKED this black action … Do not retry it.
+  warden: bash → red ? approve — ⚠ http request to an internal/RFC1918 address (SSRF risk)
+    ▶ bash: curl http://10.0.0.5/deploy   ⟵ warden red: ⚠ internal SSRF
+    [a]llow  [d]eny  [A]lways  [e]dit  [q]uit ? d
+```
+
+- Each tool call is classified `green` / `yellow` / `red` / `black`: **black is blocked** (the model is told, and adapts or stops), **red is held** for your approval (reusing the `--guard` prompt when a TTY is attached; fail-closed when unattended), **green/yellow pass**. warden routes hands' tools to the right risk model — `bash`→shell, `read_page`→fetch (SSRF / cloud-metadata / exfil), the editor→write (persistence / write-root) — so a prompt-injected page steering `read_page` at `169.254.169.254` is blocked, not silently fetched.
+- The gate is loop-level, so it covers `read_page` / `find_files` too. Every verdict is appended to warden's **hash-chained, tamper-evident** audit at `~/.warden/audit.jsonl`; the run ends with a `warden: N allowed · N approved · N denied · N blocked` tally.
+- Like `--guard`, it runs in **SDK mode** and is mutually exclusive with `--dry-run` / `--json` / `--continue` / `--guard`.
+- **warden is optional** — it isn't a hands dependency. Install it (`npm i -g @askalf/warden`) or, until it's on npm, point hands at a checkout with `HANDS_WARDEN_PATH=/path/to/warden`. Without it, `--warden` errors helpfully and the rest of hands is unaffected.
+
 ### Audit
 
 ```bash
@@ -458,6 +481,7 @@ src/
     page-cleanup.ts # HTML cleanup pipeline for read_page
     cli-overrides.ts# per-run -m / -b / -t validation
     guard.ts        # --guard decision engine (classify / preview / parse + GuardController)
+    warden.ts       # --warden bridge — dynamic loader + WardenGate over @askalf/warden
     output.ts       # chalked stdout helpers
 ```
 
@@ -543,7 +567,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
 - **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
-Run `npm install && npm run build && npm test` to get a working dev tree (264 tests across 26 test files).
+Run `npm install && npm run build && npm test` to get a working dev tree (276 tests across 27 test files).
 
 ---
 

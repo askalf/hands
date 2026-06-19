@@ -64,6 +64,7 @@ program
   .option('--json', 'Emit one machine-readable JSON object on stdout. Implies --once and silences all decorative output.')
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .option('--guard', 'Pause for [a]llow / [d]eny / [A]lways / [e]dit / [q]uit before every state-changing action. Forces SDK mode (like --dry-run).')
+  .option('--warden', 'Route each action through warden\'s policy firewall (blocks black, holds red for approval). Forces SDK mode. Needs @askalf/warden installed (or HANDS_WARDEN_PATH).')
   .option('--no-dario', 'Skip the dario proxy auto-detect at startup. Forces direct api.anthropic.com routing even when dario is reachable on localhost:3456.')
   .option('--persona <name>', 'Use a named persona (bundled: minimal, thorough, concise, security-aware) or ~/.hands/personas/<name>.md. SDK mode only.')
   .option('--system-prompt <path>', 'Path to a system-prompt file. Bypasses --persona. SDK mode only.')
@@ -101,6 +102,7 @@ program
         json: opts.json,
         dryRun: opts.dryRun,
         guard: opts.guard,
+        warden: opts.warden,
         noDario: opts.dario === false,
         params: setParsed.params,
         ...(opts.persona ? { persona: opts.persona } : {}),
@@ -152,6 +154,7 @@ program
       voice: opts.voice,
       dryRun: opts.dryRun,
       guard: opts.guard,
+      warden: opts.warden,
       noDario: opts.dario === false,
       continueSession: opts.continue,
       once,

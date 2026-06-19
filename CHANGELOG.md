@@ -11,6 +11,20 @@ checklist.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-19
+
+warden integration. v0.9.0 added a human gate (`--guard`); v0.10.0 adds a *policy* gate — `hands run --warden` routes every SDK-mode tool call through [warden](https://github.com/askalf/warden), the Own Your Stack agent-security firewall, before it executes. The same guard that fronts Claude Code, the platform forge, and MCP servers now fronts hands' computer-use loop, writing to the same tamper-evident audit. Minor-version bump for the new flag.
+
+PR in this release: #88 (warden integration).
+
+### Added — `hands run --warden`: gate every action through warden's policy firewall
+
+- Each tool call is classified by warden (`green` / `yellow` / `red` / `black`) before dispatch: **black is blocked** outright (the model is told it was blocked and not to retry), **red is held** for the operator (the prompt reuses `--guard`'s `[a]llow/[d]eny/[A]lways/[e]dit/[q]uit` loop when a TTY is attached; fail-closed when unattended), and **green/yellow pass through**. Warden's `mapMcpToAction` routes hands' tools to the right risk model — `bash`→shell (obfuscation/destructive-command checks), `read_page`→fetch (SSRF / cloud-metadata / exfil), the text editor→write (persistence / write-root) — so a prompt-injected page steering `read_page` at `169.254.169.254` is black-blocked, not silently fetched.
+- The gate sits at the **loop level**, so it covers the read-only custom tools (`read_page`, `find_files`) too, not just the state-changing ones. Every verdict is appended to warden's **hash-chained audit** at `~/.warden/audit.jsonl` — the same durable, tamper-evident log warden's other surfaces write — and a one-line `warden: <tool> → <tier>` status prints per call, with a `N allowed · N approved · N denied · N blocked` tally at the end.
+- Like `--guard`/`--dry-run`, the gate must intercept where hands executes the tools, so `--warden` runs in **SDK mode** (Claude Login forces SDK for the invocation; route through dario for $0). It's mutually exclusive with `--dry-run`, `--json`, `--continue`, and `--guard` (two distinct gates — pick one); a multi-step `@recipe` under `--warden` is refused up front.
+- **warden stays optional** — it is *not* a hands runtime dependency (the core six stay six). `--warden` declares warden as an optional peer and loads `@askalf/warden` dynamically, erroring helpfully when it's absent. Until warden is on npm, point hands at a checkout with `HANDS_WARDEN_PATH`.
+- New module `src/util/warden.ts` — a dynamic, fail-helpful loader; a pure `verdictLine` renderer; and a `WardenGate` whose firewall + operator prompt are injected, so the decision logic is unit-testable without a real warden. 12 new tests (10 in `test/warden.test.mjs` — including a real-warden integration test that loads the sibling checkout via `HANDS_WARDEN_PATH` and confirms `rm -rf /` is blocked / `ls` allowed, auto-skipped in CI — plus 2 agent-loop integration tests in `test/sdk-loop.test.mjs` driving deny + abort through `runSdkMode`). 276 total across 27 files. Zero new runtime dependencies.
+
 ## [0.9.0] - 2026-06-18
 
 Guarded step-through mode. hands has had two postures: `--dry-run` (the agent plans, nothing fires) and full-send (every tool call executes). v0.9.0 adds the one in between — `hands run --guard` pauses for an explicit decision before each state-changing action, so you can let the agent drive while keeping a hand on the wheel. This is the operating answer to the README's own threat model (prompt injection, "review before you trust a new task class"). Minor-version bump for the new flag.
