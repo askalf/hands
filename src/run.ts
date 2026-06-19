@@ -8,6 +8,7 @@ import { autoDetectDario } from './dario-detect.js';
 import { resolvePersona, resolveSystemPromptFile, type PersonaResolution } from './personas.js';
 import { loadLastSession } from './util/session-state.js';
 import type { GuardController } from './util/guard.js';
+import type { WardenGate } from './util/warden.js';
 import * as output from './util/output.js';
 
 export interface RunOptions {
@@ -16,6 +17,8 @@ export interface RunOptions {
   dryRun?: boolean;
   /** When set, every state-changing tool call pauses for approval before it fires (`hands run --guard`). Like dry-run, this is a SDK-mode gate, so it forces SDK mode for the invocation. Mutually exclusive with --dry-run / --json / --continue. */
   guard?: boolean;
+  /** When set, every tool call is classified by warden's policy firewall before dispatch (`hands run --warden`). SDK-mode gate like --guard. Mutually exclusive with --dry-run / --json / --continue / --guard. */
+  warden?: boolean;
   /** When true, skip the dario auto-detect probe at startup. Use when the operator wants explicit api.anthropic.com routing despite dario being available. */
   noDario?: boolean;
   /** Named persona (bundled or ~/.hands/personas/<name>.md). Replaces the default OS-aware system prompt with the persona's text. SDK mode only. */
@@ -89,6 +92,24 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
   }
   if (options.guard && options.continueSession) {
     output.error('--guard and --continue are mutually exclusive: guard forces SDK mode, --continue is Claude Login only.');
+    process.exit(1);
+  }
+  // --warden has the same SDK-mode, interactive constraints as --guard, and
+  // the two are distinct gates — pick one.
+  if (options.warden && options.guard) {
+    output.error('--warden and --guard are mutually exclusive: warden gates by policy (and prompts only on red); guard prompts on every action. Pick one.');
+    process.exit(1);
+  }
+  if (options.warden && options.dryRun) {
+    output.error('--warden and --dry-run are mutually exclusive: there is nothing to gate when nothing fires.');
+    process.exit(1);
+  }
+  if (options.warden && options.json) {
+    output.error('--warden and --json are mutually exclusive: warden may prompt for red-tier actions, which is interactive.');
+    process.exit(1);
+  }
+  if (options.warden && options.continueSession) {
+    output.error('--warden and --continue are mutually exclusive: warden forces SDK mode, --continue is Claude Login only.');
     process.exit(1);
   }
 
@@ -198,6 +219,17 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
     config.authMode = 'api_key';
   }
 
+  // --warden gates at the SDK dispatch site too — same reasoning as --guard.
+  if (options.warden && config.authMode === 'oauth') {
+    if (!hasSdkCredentials(config.apiKey)) {
+      output.error('--warden runs in SDK mode, and no API key is configured.');
+      output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --warden to use Claude Login mode.');
+      process.exit(1);
+    }
+    output.warn('--warden runs in SDK mode (the gate must sit at the dispatch site). Forcing SDK mode; route through dario to keep it $0.');
+    config.authMode = 'api_key';
+  }
+
   // Auto-detect auth mode
   if (config.authMode === 'oauth') {
     const hasClaude = await commandExists('claude');
@@ -248,18 +280,44 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
         process.exit(1);
       }
       let guardHandle: { guard: GuardController; close: () => void } | undefined;
+      let wardenGate: WardenGate | undefined;
       if (options.guard) {
         const { createTerminalGuard } = await import('./util/guard.js');
         guardHandle = createTerminalGuard();
         output.info('guarded mode — every state-changing action pauses for [a]llow / [d]eny / [A]lways / [e]dit / [q]uit.');
       }
+      if (options.warden) {
+        const { createWardenGate, wardenPaths } = await import('./util/warden.js');
+        // Red-tier approvals reuse the guard prompt, but only when a TTY is
+        // attached; unattended, red fails closed.
+        const interactive = process.stdin.isTTY === true;
+        if (interactive) {
+          const { createTerminalGuard } = await import('./util/guard.js');
+          guardHandle = createTerminalGuard();
+        }
+        try {
+          wardenGate = await createWardenGate({
+            ...(interactive && guardHandle ? { guard: guardHandle.guard } : {}),
+            out: (line: string) => output.info(line),
+          });
+        } catch (err) {
+          guardHandle?.close();
+          output.error(err instanceof Error ? err.message : String(err));
+          process.exit(1);
+        }
+        output.info(
+          `warden firewall active — ${interactive ? 'red-tier actions prompt for approval' : 'unattended: red-tier fails closed'}. Policy: ${wardenPaths().policy}`,
+        );
+      }
       try {
         const result = await runSdkMode(prompt, config, {
           dryRun: options.dryRun,
           ...(personaResolution ? { systemPromptOverride: personaResolution.prompt } : {}),
-          ...(guardHandle ? { guard: guardHandle.guard } : {}),
+          ...(options.guard && guardHandle ? { guard: guardHandle.guard } : {}),
+          ...(wardenGate ? { warden: wardenGate } : {}),
         });
-        if (guardHandle) output.info(guardHandle.guard.summary());
+        if (wardenGate) output.info(wardenGate.summary());
+        else if (guardHandle) output.info(guardHandle.guard.summary());
         if (options.json) {
           console.log(formatRunJson(result, 'sdk', !!options.dryRun));
         } else {

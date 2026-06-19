@@ -101,6 +101,33 @@ test('agent loop: --guard quit aborts the run before the next API call', async (
   assert.match(result.text, /aborted/i);
 });
 
+test('agent loop: --warden deny → executor skipped, model sees the block', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_b', name: 'bash', input: { command: 'rm -rf /' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'understood, stopping' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  let gated = 0;
+  const warden = { gate: async () => { gated++; return { action: 'deny', reason: 'warden BLOCKED this black action.' }; } };
+  const result = await runSdkMode('wipe the disk', CONFIG, { testClient: client, testScreen: SCREEN, warden });
+  assert.equal(gated, 1, 'warden gate runs before dispatch');
+  assert.equal(result.text, 'understood, stopping');
+  const second = client.requests[1];
+  const tr = second.messages.find((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_result'));
+  assert.ok(tr, 'block must come back as a tool_result');
+  assert.match(tr.content[0].content[0].text, /BLOCKED/);
+});
+
+test('agent loop: --warden abort ends the run before the next API call', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_b', name: 'bash', input: { command: 'x' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'should not reach' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const warden = { gate: async () => ({ action: 'abort' }) };
+  const result = await runSdkMode('do the risky thing', CONFIG, { testClient: client, testScreen: SCREEN, warden });
+  assert.equal(client.requests.length, 1, 'aborted before the second API call');
+  assert.match(result.text, /aborted/i);
+});
+
 test('agent loop: tool_use turn → tool_result fed back → end_turn finishes', async () => {
   const client = scriptedClient([
     {

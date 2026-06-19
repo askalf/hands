@@ -16,6 +16,7 @@ import { redactSecrets } from './util/redact.js';
 import { readPage } from './tools/read-page.js';
 import { findFiles } from './tools/find-files.js';
 import { classifyToolUse, previewToolUse, GuardAbort, type GuardController } from './util/guard.js';
+import type { WardenGate } from './util/warden.js';
 
 interface RunResult {
   text: string;
@@ -40,6 +41,8 @@ export interface SdkModeOptions {
   dryRun?: boolean | undefined;
   /** When set, every state-changing tool call pauses for an [a]llow/[d]eny/[A]lways/[e]dit/[q]uit decision before it fires (`hands run --guard`). Read-only calls pass through. Mutually exclusive with dryRun. */
   guard?: GuardController | undefined;
+  /** When set, every tool call is classified by warden's policy firewall before dispatch (`hands run --warden`): black is blocked, red is held for the operator, green/yellow allowed. Mutually exclusive with dryRun / guard. */
+  warden?: WardenGate | undefined;
   /** When set, replaces the default OS-aware system prompt with this exact string. Used by --persona / --system-prompt to swap in custom prompt content. */
   systemPromptOverride?: string | undefined;
   /** TEST HOOK — fake Anthropic client so the agent loop is testable without an API key. Combine with dryRun + testScreen. */
@@ -199,6 +202,25 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
         hasToolUse = true;
         let result: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
         try {
+          // warden policy gate (loop-level so it covers read_page / find_files too).
+          if (opts.warden) {
+            const outcome = await opts.warden.gate({ name: block.name, input: block.input as Record<string, unknown> });
+            if (outcome.action === 'abort') {
+              output.warn('Run aborted at the warden prompt.');
+              finalText = finalText || 'Run aborted by operator before completion.';
+              aborted = true;
+              break;
+            }
+            if (outcome.action === 'deny') {
+              output.warn(`[warden] ${outcome.reason}`);
+              toolResults.push({
+                role: 'user',
+                content: [{ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: outcome.reason }] } as unknown as Anthropic.Beta.BetaContentBlockParam],
+              });
+              continue;
+            }
+            if (outcome.input) (block as { input?: unknown }).input = outcome.input;
+          }
           if (block.name === 'read_page') {
             result = await executeReadPage(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
           } else if (block.name === 'find_files') {
