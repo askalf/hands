@@ -509,7 +509,7 @@ No runtime-behavior change. All scaffolding for the v0.1.0 release when the mode
 
 ## [0.1.0] — unreleased
 
-Seeded from [`@askalf/agent`](https://github.com/askalf/agent) commit `bef177d` — the last pre-fleet-bridge state of that repo, which was an open-source computer-use agent with PowerShell-first control, optional voice input, safety guardrails, session memory, and self-correction.
+Seeded from `@askalf/agent` commit `bef177d` — the last pre-fleet-bridge state of that repo, which was an open-source computer-use agent with PowerShell-first control, optional voice input, safety guardrails, session memory, and self-correction.
 
 What's in the seed (all carried forward from v0.3.7 of the originating tree):
 
