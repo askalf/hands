@@ -286,6 +286,35 @@ auditCmd
   });
 
 auditCmd
+  .command('stats')
+  .description('Aggregate the audit log: success rate, per-tool breakdown, and recent failures')
+  .option('--mode <mode>', "Filter by run mode: 'cli' or 'sdk'")
+  .option('--tool <name>', 'Filter by tool name (e.g. bash, computer, read_page)')
+  .option('--since <window>', 'Only entries within a recent window: 30m, 24h, 7d')
+  .option('--json', 'Emit the stats as JSON')
+  .action(async (opts) => {
+    const { readAuditEntries, filterAuditEntries } = await import('./audit-replay.js');
+    const { computeAuditStats, renderStatsText, renderStatsJson, parseDuration } = await import('./audit-stats.js');
+    if (opts.mode && opts.mode !== 'cli' && opts.mode !== 'sdk') {
+      output.error(`Invalid --mode: ${opts.mode}. Choose 'cli' or 'sdk'.`);
+      process.exit(1);
+    }
+    let entries = await readAuditEntries();
+    if (opts.since) {
+      const ms = parseDuration(opts.since);
+      if (ms == null) {
+        output.error(`Invalid --since: ${opts.since}. Use a unit, e.g. 30m, 24h, 7d.`);
+        process.exit(1);
+      }
+      const cutoff = Date.now() - ms;
+      entries = entries.filter((e) => e.ts != null && e.ts >= cutoff);
+    }
+    const filtered = filterAuditEntries(entries, { mode: opts.mode, tool: opts.tool }).map((ie) => ie.entry);
+    const stats = computeAuditStats(filtered);
+    console.log(opts.json ? renderStatsJson(stats) : renderStatsText(stats));
+  });
+
+auditCmd
   .command('show <index>')
   .description('Show full JSON detail for one audit entry')
   .action(async (indexStr) => {
