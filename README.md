@@ -508,6 +508,8 @@ hands audit list --mode cli --tool bash   # filter: Claude Login bash calls only
 hands audit list --failed --json          # everything that went wrong, as JSON
 hands audit show <index>    # full JSON detail for one entry
 hands audit replay <index>  # dry-run replay of one tool call; --execute fires it
+hands audit stats           # success rate, per-tool latency, recent failures
+hands audit stats --since 24h --json      # last day's rollup, as JSON for scripts
 ```
 
 ### Health & diagnostics
@@ -550,6 +552,7 @@ src/
   watch-run.ts      # watch probes (fs/clipboard/process) + the poll/fire loop
   ui.ts             # --ui — accessibility-tree enumeration + ui_tree / click_element tools
   audit-replay.ts   # hands audit list / show / replay
+  audit-stats.ts    # hands audit stats — pure rollup (success rate, per-tool, failures) + renderers
   system-prompt.ts  # OS-aware system-prompt builders (win32 / darwin / linux)
   platform/         # screenshot / mouse / keyboard / screen-info per platform + claude CLI resolver
   tools/            # read_page (fetch + HTML cleanup) and find_files (list / grep in one turn)

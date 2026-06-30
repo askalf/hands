@@ -286,6 +286,40 @@ auditCmd
   });
 
 auditCmd
+  .command('stats')
+  .description('Summarize the audit log: success rate, per-tool breakdown, recent failures')
+  .option('--since <window>', 'Only count entries within a recent window: 90s, 30m, 24h, 7d')
+  .option('--mode <mode>', "Filter by run mode: 'cli' (Claude Login) or 'sdk' (entries from before v0.6.0 count as sdk)")
+  .option('--tool <name>', 'Filter by tool name (e.g. bash, computer, read_page)')
+  .option('--json', 'Emit the stats as JSON, with the derived successRate folded in')
+  .action(async (opts) => {
+    const { readAuditEntries, filterAuditEntries } = await import('./audit-replay.js');
+    const { computeAuditStats, renderStatsText, renderStatsJson, parseDuration } = await import('./audit-stats.js');
+    if (opts.mode && opts.mode !== 'cli' && opts.mode !== 'sdk') {
+      output.error(`Invalid --mode: ${opts.mode}. Choose 'cli' or 'sdk'.`);
+      process.exit(1);
+    }
+    let sinceMs: number | null = null;
+    if (opts.since) {
+      sinceMs = parseDuration(opts.since);
+      if (sinceMs === null) {
+        output.error(`Invalid --since: ${opts.since}. Use a window like 90s, 30m, 24h, or 7d.`);
+        process.exit(1);
+      }
+    }
+    const entries = await readAuditEntries();
+    // Reuse audit list's mode/tool filter, then drop the replay index — stats don't need it.
+    let scoped = filterAuditEntries(entries, { mode: opts.mode, tool: opts.tool }).map((e) => e.entry);
+    // A --since window is a timestamp filter; entries with no ts can't be placed in it, so they fall out.
+    if (sinceMs !== null) {
+      const cutoff = Date.now() - sinceMs;
+      scoped = scoped.filter((e) => typeof e.ts === 'number' && e.ts >= cutoff);
+    }
+    const stats = computeAuditStats(scoped);
+    console.log(opts.json ? renderStatsJson(stats) : renderStatsText(stats));
+  });
+
+auditCmd
   .command('show <index>')
   .description('Show full JSON detail for one audit entry')
   .action(async (indexStr) => {
