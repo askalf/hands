@@ -11,6 +11,10 @@ checklist.
 
 ## [Unreleased]
 
+### Added — `hands audit stats`: roll the audit log up
+
+- New read-only subcommand **`hands audit stats`** (shipped in #99) summarizes `~/.hands/audit.jsonl` instead of scrolling it: overall success rate, an ok/failed and sdk/cli split, a per-tool breakdown with average latency, and the most recent failures. `--since <90s|30m|24h|7d>` scopes to a recent window; `--mode` / `--tool` reuse the exact filter `audit list` uses; `--json` emits the stats (with a derived `successRate`) for scripts. Backed by `src/audit-stats.ts` (pure aggregation + renderers, 13 tests).
+
 ## [0.14.0] - 2026-06-19
 
 Semantic UI targeting. Most computer-use agents click by pixel: screenshot, reason about coordinates, click, screenshot again to check — slow, costly, and brittle to any layout shift. `hands run --ui` reads the OS accessibility tree instead and clicks **by name and role** — "click the Save button", no screenshot, no coordinates. Same idea as hands' shell-first bias, applied to the GUI. Windows-first (UIAutomation); macOS/Linux report not-yet. Minor-version bump for the new `--ui` flag.
