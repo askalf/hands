@@ -11,6 +11,19 @@ checklist.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-01
+
+Parameterize without touching JSON. Macros have taken `{{params}}` since v0.11 — but creating one meant hand-editing the file. `hands macro parameterize deploy env=staging` now does it in one command, completing the crystallize story: record once, generalize the recording, re-aim the replay forever — all zero-LLM. Minor-version bump for the new subcommand.
+
+PR in this release: #104 (macro parameterize).
+
+### Added — `hands macro parameterize`: literal → reusable `{{param}}`
+
+- **`hands macro parameterize <name> <key=value…>`** rewrites every occurrence of each value across the parameterizable fields (`command`, typed `text`, file paths/contents, `click_element` target names) into `{{key=value}}`. The original value becomes the **default**, so a bare `hands play` replays byte-identically; `--set key=other` re-aims it. `--dry-run` previews without saving.
+- **Placeholder-safe and atomic**: rewriting never happens inside an existing `{{…}}` (parameterizing `stag` can't corrupt a `{{env=staging}}`; assignments apply in order). A value that appears nowhere errors and saves *nothing* — typo protection. Empty values, invalid keys, and values containing `}` (which can't round-trip through the default parser) are rejected up front.
+- **`hands macro show`** now lists a macro's params (first-appearance order; a key shows as required `{{key}}` if any occurrence lacks a default — the occurrence `hands play` will refuse to run without a `--set`).
+- Pure core `macroParams()` + `parameterizeMacro()` in `src/macros.ts`; the `{{key=default}}` grammar (`PLACEHOLDER_RE`) is now exported from `recipes.ts` so macros and recipes share one definition. 9 new tests (345 total). Live-smoked end-to-end on Windows: dry-run → save → show → bare play (original output) → `--set` re-aim (new output) → zero-match refusal.
+
 ## [0.15.0] - 2026-07-01
 
 Semantic clicks become first-class. v0.14.0's `--ui` shipped with a caveat — UI clicks bypassed `--guard` and never made it into macros. Both gaps close here, and macros gain their most robust step type: a **semantic replay** that re-finds its target by name in the live accessibility tree, wherever the control sits now. Minor-version bump for the new behavior.
