@@ -21,6 +21,8 @@ const {
   isRecordable,
   MacroRecorder,
   applyMacroParams,
+  macroParams,
+  parameterizeMacro,
   macroToScript,
   previewStep,
   getMacrosDir,
@@ -89,6 +91,89 @@ test('applyMacroParams — substitutes across command/text/path fields; reports 
   assert.equal(applied.steps[0].input.command, 'deploy {{env}}');
   assert.equal(applied.steps[1].input.text, 'hi Alf');
   assert.deepEqual(missing, ['env']);
+});
+
+// ── macroParams ─────────────────────────────────────────────────────
+
+test('macroParams — lists params in first-appearance order with defaults', () => {
+  const macro = { name: 'm', steps: [
+    { tool: 'bash', input: { command: 'deploy {{env=staging}} --tag {{tag}}' } },
+    { tool: 'click_element', input: { name: '{{tab=General}}' } },
+  ] };
+  assert.deepEqual(macroParams(macro), [
+    { key: 'env', def: 'staging' },
+    { key: 'tag', def: undefined },
+    { key: 'tab', def: 'General' },
+  ]);
+});
+
+test('macroParams — a key is required if ANY occurrence lacks a default', () => {
+  const macro = { name: 'm', steps: [
+    { tool: 'bash', input: { command: 'echo {{env=staging}}' } },
+    { tool: 'bash', input: { command: 'deploy {{env}}' } },
+  ] };
+  assert.deepEqual(macroParams(macro), [{ key: 'env', def: undefined }]);
+});
+
+test('macroParams — no placeholders → empty', () => {
+  assert.deepEqual(macroParams({ name: 'm', steps: [{ tool: 'bash', input: { command: 'ls' } }] }), []);
+});
+
+// ── parameterizeMacro ───────────────────────────────────────────────
+
+test('parameterizeMacro — rewrites every literal occurrence across fields, original becomes the default', () => {
+  const macro = { name: 'm', platform: 'linux', steps: [
+    { tool: 'bash', input: { command: 'git checkout staging; deploy staging' } },
+    { tool: 'str_replace_based_edit_tool', input: { command: 'create', path: '/tmp/staging.log', file_text: 'env: staging' } },
+  ] };
+  const { macro: out, replaced } = parameterizeMacro(macro, { env: 'staging' });
+  assert.equal(replaced.env, 4);
+  assert.equal(out.steps[0].input.command, 'git checkout {{env=staging}}; deploy {{env=staging}}');
+  assert.equal(out.steps[1].input.path, '/tmp/{{env=staging}}.log');
+  assert.equal(out.steps[1].input.file_text, 'env: {{env=staging}}');
+  assert.equal(out.platform, 'linux', 'metadata rides along');
+  // The default makes it a no-op replay: applying no params round-trips.
+  const { macro: applied, missing } = applyMacroParams(out, {});
+  assert.deepEqual(missing, []);
+  assert.equal(applied.steps[0].input.command, 'git checkout staging; deploy staging');
+  // …and --set re-aims it.
+  const { macro: reAimed } = applyMacroParams(out, { env: 'prod' });
+  assert.equal(reAimed.steps[0].input.command, 'git checkout prod; deploy prod');
+});
+
+test('parameterizeMacro — does not touch the original macro (pure)', () => {
+  const macro = { name: 'm', steps: [{ tool: 'bash', input: { command: 'deploy staging' } }] };
+  parameterizeMacro(macro, { env: 'staging' });
+  assert.equal(macro.steps[0].input.command, 'deploy staging');
+});
+
+test('parameterizeMacro — never rewrites inside an existing placeholder', () => {
+  const macro = { name: 'm', steps: [
+    { tool: 'bash', input: { command: 'echo {{env=staging}} stag' } },
+  ] };
+  const { macro: out, replaced } = parameterizeMacro(macro, { s: 'stag' });
+  assert.equal(replaced.s, 1, 'only the literal outside the placeholder');
+  assert.equal(out.steps[0].input.command, 'echo {{env=staging}} {{s=stag}}');
+});
+
+test('parameterizeMacro — assignments apply in order; a later value skips earlier placeholders', () => {
+  const macro = { name: 'm', steps: [{ tool: 'bash', input: { command: 'deploy staging-eu on staging' } }] };
+  const { macro: out } = parameterizeMacro(macro, { region: 'staging-eu', env: 'staging' });
+  assert.equal(out.steps[0].input.command, 'deploy {{region=staging-eu}} on {{env=staging}}');
+});
+
+test('parameterizeMacro — reports 0 for a value that appears nowhere', () => {
+  const macro = { name: 'm', steps: [{ tool: 'bash', input: { command: 'deploy staging' } }] };
+  const { macro: out, replaced } = parameterizeMacro(macro, { env: 'production' });
+  assert.equal(replaced.env, 0);
+  assert.equal(out.steps[0].input.command, 'deploy staging', 'nothing rewritten');
+});
+
+test('parameterizeMacro — rejects empty values, bad keys, and values with "}"', () => {
+  const macro = { name: 'm', steps: [{ tool: 'bash', input: { command: 'x' } }] };
+  assert.throws(() => parameterizeMacro(macro, { env: '' }), /non-empty/);
+  assert.throws(() => parameterizeMacro(macro, { 'bad-key': 'x' }), /Invalid param key/);
+  assert.throws(() => parameterizeMacro(macro, { env: 'a}b' }), /can't be stored/);
 });
 
 test('applyMacroParams — substitutes a click_element target name', () => {

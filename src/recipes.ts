@@ -209,7 +209,8 @@ export function serializeRecipe(recipe: Recipe): string {
 
 // ── pure: parameters ────────────────────────────────────────────────
 
-const PLACEHOLDER_RE = /\{\{\s*([a-zA-Z0-9_]+)\s*(?:=([^}]*))?\}\}/g;
+/** `{{key}}` / `{{key=default}}`. Shared with macros (parameterize/params). */
+export const PLACEHOLDER_RE = /\{\{\s*([a-zA-Z0-9_]+)\s*(?:=([^}]*))?\}\}/g;
 
 /**
  * Substitute `{{key}}` / `{{key=default}}` placeholders. Missing keys
