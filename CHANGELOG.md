@@ -15,7 +15,7 @@ checklist.
 
 Deterministic automation that repairs itself. A macro replays at $0 until the world drifts — a file gets renamed, a control moves, a flag changes — and then a human had to bring the model back by hand. `hands play --heal` brings it back automatically: a failing step summons the model for a **bounded repair of just that step**, the replay continues, and `--commit` crystallizes the fix into the macro — so the next play is back to $0. Automation that converges instead of rotting. Minor-version bump for the new flags.
 
-PR in this release: #TBD (self-healing replay).
+PR in this release: #108 (self-healing replay).
 
 ### Added — `hands play --heal`: self-healing replay
 
