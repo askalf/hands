@@ -336,7 +336,7 @@ hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK 
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
 hands run "<prompt>" --warden         # gate each action through warden's policy firewall (SDK mode)
 hands run "<prompt>" --warden --judge # + LLM judge deobfuscates gray-zone calls, escalate-only (SDK mode)
-hands run "<prompt>" -m claude-opus-4-6     # override model (this run only)
+hands run "<prompt>" -m claude-opus-4-8     # override model (this run only)
 hands run "<prompt>" -b 10.00         # SDK budget cap (USD); default $5.00
 hands run "<prompt>" -t 100           # max turns per task; default 50
 hands run "<prompt>" --persona thorough     # named system-prompt override (SDK mode)
@@ -528,7 +528,7 @@ hands doctor --json         # structured for CI / scripts
 hands doctor --skip-dario   # skip the dario reachability probe
 hands check                 # platform-deps subset of doctor (legacy; doctor covers everything)
 hands config                # view config
-hands config --model claude-opus-4-6 --turns 100   # update fields
+hands config --model claude-opus-4-8 --turns 100   # update fields
 ```
 
 `hands run --dry-run` is the no-side-effects path: the full agent loop with every tool call audit-logged but stubbed. Useful for first runs against new task classes or for reviewing a model's plan before committing. Forces SDK mode if you're on Claude Login (execution can't be stubbed inside the claude child).
