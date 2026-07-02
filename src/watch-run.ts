@@ -23,6 +23,10 @@ export interface RunWatchOptions {
   once?: boolean | undefined;
   /** Skip the dario auto-detect probe for task actions. */
   noDario?: boolean | undefined;
+  /** Macro actions: a failing step brings the model back to repair it (self-healing replay). */
+  heal?: boolean | undefined;
+  /** Macro actions, with heal: write repaired steps back into the macro. */
+  commit?: boolean | undefined;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -81,20 +85,25 @@ function substitute(text: string, context: Record<string, string>): string {
   return out;
 }
 
-async function runAction(action: WatchAction, context: Record<string, string>, noDario: boolean | undefined): Promise<void> {
+async function runAction(action: WatchAction, context: Record<string, string>, opts: RunWatchOptions): Promise<void> {
   if (action.kind === 'macro') {
     const { playMacro } = await import('./macro-run.js');
-    await playMacro(action.name, { params: context });
+    await playMacro(action.name, {
+      params: context,
+      ...(opts.heal ? { heal: true } : {}),
+      ...(opts.commit ? { commit: true } : {}),
+    });
     return;
   }
   const { run } = await import('./run.js');
-  await run(substitute(action.task, context), { once: true, ...(noDario ? { noDario: true } : {}) });
+  await run(substitute(action.task, context), { once: true, ...(opts.noDario ? { noDario: true } : {}) });
 }
 
 /** Poll the trigger and run the action on each fire. Runs until once/max or Ctrl+C. */
 export async function runWatch(trigger: WatchTrigger, action: WatchAction, opts: RunWatchOptions): Promise<void> {
   const engine = new WatchEngine(trigger, realProbes());
-  const what = action.kind === 'macro' ? `play macro "${action.name}"` : `run: ${action.task.slice(0, 60)}`;
+  const healNote = action.kind === 'macro' && opts.heal ? ` (self-healing${opts.commit ? ', repairs commit' : ''})` : '';
+  const what = action.kind === 'macro' ? `play macro "${action.name}"${healNote}` : `run: ${action.task.slice(0, 60)}`;
   output.info(`watching for ${describeTrigger(trigger)} every ${opts.intervalMs}ms → ${what}. Ctrl+C to stop.`);
 
   let fires = 0;
@@ -110,7 +119,7 @@ export async function runWatch(trigger: WatchTrigger, action: WatchAction, opts:
       const tag = hit.context['file'] ?? (hit.context['match'] ? `"${hit.context['match']}"` : '');
       output.success(`▶ trigger fired${tag ? `: ${tag}` : ''} (#${fires})`);
       try {
-        await runAction(action, hit.context, opts.noDario);
+        await runAction(action, hit.context, opts);
       } catch (err) {
         output.error(`action failed: ${err instanceof Error ? err.message : String(err)}`);
       }

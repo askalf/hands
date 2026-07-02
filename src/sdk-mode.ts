@@ -850,10 +850,14 @@ async function executeComputerActionInner(
     const command = input['command'] as string;
     output.action('bash', command);
 
-    // Guardrail check — block dangerous commands
+    // Guardrail check — block dangerous commands. THROW rather than return:
+    // the loop turns the throw into an error tool_result for the model, and
+    // the dispatch wrapper audits ok:false and skips the recorder — a
+    // blocked command must never crystallize into a macro step (it would
+    // hit the same blocklist on replay and fail forever).
     const guard = checkCommand(command);
     if (guard.blocked) {
-      return [{ type: 'text', text: `GUARDRAIL BLOCKED: ${guard.reason}. This command is not allowed. Use a safer approach.` }];
+      throw new Error(`GUARDRAIL BLOCKED: ${guard.reason}. This command is not allowed. Use a safer approach.`);
     }
 
     const { execSync } = await import('node:child_process');
@@ -861,8 +865,11 @@ async function executeComputerActionInner(
       const result = execSync(command, { timeout: 30000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
       return [{ type: 'text', text: result }];
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return [{ type: 'text', text: `Error: ${msg}` }];
+      // Rethrow (don't swallow): a non-zero exit must reach the dispatch
+      // wrapper so the audit says ok:false and --record / --heal don't
+      // capture a FAILED command as a replayable step. The model still
+      // sees the error text via the loop's catch and adapts.
+      throw err instanceof Error ? err : new Error(String(err));
     }
   } else if (toolName === 'str_replace_based_edit_tool') {
     const command = input['command'] as string;

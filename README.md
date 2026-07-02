@@ -328,6 +328,7 @@ hands run @<recipe>         # run a saved recipe (see Recipes below)
 hands run @<recipe> --set k=v   # fill the recipe's {{k}} placeholders
 hands run --record <name> "<task>"   # crystallize the run into a deterministic macro
 hands play <name>           # replay a recorded macro — zero LLM, free (see Crystallize)
+hands play <name> --heal --commit    # self-healing replay: a failing step is repaired by the model and the fix crystallizes back
 hands run "<prompt>" --verify        # agent proves success with a real check before claiming done
 hands watch --on-file <glob> --do "<task>"   # fire a task when a file/clipboard/command/timer event hits
 hands run "<prompt>" --ui            # target controls by name via the accessibility tree (Windows, SDK mode)
@@ -417,6 +418,22 @@ hands macro list / show nightly / rm nightly
 - **`macro parameterize`** (v0.16.0) turns a literal value into a reusable `{{param}}` in one command: `hands macro parameterize deploy env=staging` rewrites every `staging` (never inside an existing `{{…}}`) into `{{env=staging}}`. The original value becomes the **default**, so a bare `hands play` replays byte-identically — `--set env=prod` re-aims it. A value that appears nowhere errors and saves nothing (typo protection), and `macro show` lists a macro's params.
 - **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
 
+### Self-healing replay — automation that converges instead of rotting
+
+A macro replays at $0 until the world drifts — a file gets renamed, a button moves, a flag changes — and a step starts failing. Every other automation rots at that moment and waits for a human. `hands play --heal` (v0.18.0) brings the model back **for a bounded repair of just the failed step**, then keeps replaying deterministically:
+
+```bash
+hands play nightly --heal             # a failing step is repaired in place, the replay continues
+hands play nightly --heal --commit    # …and the fix crystallizes back into the macro
+hands play nightly --heal --warden    # …with the healer gated by warden's policy firewall
+```
+
+- The healer gets the macro's original intent, the replay position (done / **FAILED** / still-to-run), and the failing step's full input + error. Its orders: start from the failing step's own input, achieve *that step's* intent, prefer the smallest fix, and **prove it** — the repair runs with the `verify` tool, a clamped turn budget (≤20), the full guardrail blocklist, and the audit log. REPAIRED is machine-checked from the run's verdict; anything else counts as a failed step.
+- **`--commit`** splices the healer's effectful steps over the failed one — in the ORIGINAL macro, so `{{params}}` elsewhere survive (a repaired step that itself carries a `{{param}}` is never rewritten; hands tells you instead of silently baking values in). The next `hands play` replays the fix at $0: **drift → heal once → back to free**.
+- **Repairs are distilled before they commit**: one tool-less model call reviews the repair trajectory and drops the steps that were just looking around (listings, existence checks) — only the effects needed to reproduce the fix are kept. Fails open (an unusable answer keeps everything), and even a wrong drop self-corrects: that step fails on the next play and heals again.
+- **Unattended-safe**: `--warden` classifies every healer action; unattended, red-tier fails closed. Missing SDK credentials fail *before* the first step runs. Route through dario and the repair itself costs $0 on the Claude Max subscription.
+- Composes with watchers: `hands watch --on-file '~/in/*.csv' --play ingest --heal --commit` is a local automation daemon that **maintains its own macros** — no other computer-use tool self-repairs its deterministic automation.
+
 ### Semantic UI targeting
 
 Most computer-use agents click by **pixel** — screenshot, reason about coordinates, click, screenshot to check. It's slow, costly, and brittle to any layout shift. `hands run --ui` (v0.14.0) reads the **OS accessibility tree** instead and clicks by **name and role** — same idea as hands' shell-first bias, applied to the GUI.
@@ -450,6 +467,7 @@ hands watch --on-command "gh run list -L1 --json conclusion -q '.[0].conclusion=
 
 - **Triggers** (one): `--on-file <glob>` (a *new* file — pre-existing ones are the baseline), `--on-clipboard <regex>` (changed *and* matching), `--on-command <cmd>` (rising edge of exit 0), `--every <interval>` (`30s`/`5m`/`2h`).
 - **Actions** (one): `--do "<task>"` runs the model (trigger context substituted: `{{file}}`/`{{clip}}`/`{{match}}`), or `--play <macro>` replays a macro with **zero LLM** — a free, deterministic reaction to an event.
+- **`--play` + `--heal [--commit]`** (v0.18.0) makes the daemon self-maintaining: when drift breaks a macro step mid-watch, the model repairs it and (with `--commit`) the fix crystallizes back — the next fire replays at $0 again. See *Self-healing replay* above.
 - `--interval <ms>` poll rate, `--once`, `--max <n>`. A probe error or a failing action is logged; the watcher keeps going.
 
 ### Self-verifying tasks
