@@ -11,6 +11,25 @@ checklist.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-02
+
+Deterministic automation that repairs itself. A macro replays at $0 until the world drifts — a file gets renamed, a control moves, a flag changes — and then a human had to bring the model back by hand. `hands play --heal` brings it back automatically: a failing step summons the model for a **bounded repair of just that step**, the replay continues, and `--commit` crystallizes the fix into the macro — so the next play is back to $0. Automation that converges instead of rotting. Minor-version bump for the new flags.
+
+PR in this release: #TBD (self-healing replay).
+
+### Added — `hands play --heal`: self-healing replay
+
+- **`--heal`**: when a step fails, hands builds a repair task — the macro's original intent, the replay position (done / FAILED / still-to-run), the failing step's full input and error — and runs it through the SDK loop with a **clamped turn budget** (≤15) and the `verify` tool, so REPAIRED means a real check passed, not vibes. The verdict is machine-checked from the final message's tail; COULD-NOT-REPAIR (or no verdict — e.g. an aborted run) counts as a failed step, honoring `--stop-on-error`. Credentials are checked **before any step runs** — a missing key fails fast, not at step 7. Route through dario and the repair itself is $0 on a Max subscription.
+- **`--commit`**: replaces the failed step with the effectful steps the healer actually fired, in the ORIGINAL macro — `{{params}}` in other steps survive, and a repaired step that itself carries a `{{param}}` is never rewritten (the repair has this run's values baked in; hands says so instead of silently dropping the placeholder). Commits stamp `repairedAt`. A heal that verified the goal was already satisfied commits nothing.
+- **`--warden`** (with `--heal`): the healer's tool calls go through warden's policy firewall — red prompts when a TTY is attached, **fails closed unattended**. Every repair action still passes the guardrail blocklist and lands in `~/.hands/audit.jsonl` (heal attempts themselves are audited as `heal` entries).
+- **`hands watch --play <macro> --heal [--commit]`**: the automation daemon becomes self-maintaining — event fires → $0 replay → drift heals → fix commits → next event replays deterministically again. Watcher startup fail-fasts on missing SDK credentials rather than discovering them at 3am.
+- Like `--record`, the healer's successful effectful trajectory IS the repair; the heal prompt steers exploration to the read-only tools (`find_files`, `read_page`, `ui_tree`, screenshot), so an occasional benign read-only listing may ride along in a committed repair — `hands macro show` + a hand edit trims one.
+- Pure core (`buildHealPrompt`, `parseHealVerdict`, `applyRepairs`, `stepHasPlaceholder`) unit-tested without a filesystem; healer integration-tested through the real SDK loop via the test hooks. 15 new tests (363 total). Live-verified end-to-end on Windows through dario: renamed-file drift → heal (14 turns) → commit → 8/8 deterministic replay at $0.
+
+### Fixed — failed and guardrail-blocked bash calls no longer crystallize (or audit as ok)
+
+- The SDK bash executor swallowed non-zero exits (returning the error text as a normal result), so **`--record` captured FAILED commands as replayable macro steps** — and audited them `ok: true`. Surfaced by heal's live test: a failed probe committed into a macro breaks the very replay the repair was meant to fix. Failures and guardrail-blocked commands now reach the dispatch wrapper as errors: audited `ok: false`, never recorded, and the model still sees the error text and adapts. `hands audit stats` success rates are truthful for bash now.
+
 ## [0.17.0] - 2026-07-01
 
 The LLM tier for what rules can't see. Deterministic patterns read an assign-then-invoke indirection as a green read-only shell call — the obfuscation is exactly what they can't see through. `hands run --warden --judge` sends warden's gray-zone verdicts to its LLM judge, which deobfuscates and may only RAISE the tier. Minor-version bump for the new flag.

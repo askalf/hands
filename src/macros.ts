@@ -39,6 +39,8 @@ export interface Macro {
   platform?: string | undefined;
   /** Unix ms when recorded. */
   createdAt?: number | undefined;
+  /** Unix ms when `hands play --heal --commit` last rewrote steps. */
+  repairedAt?: number | undefined;
   steps: MacroStep[];
 }
 
@@ -113,6 +115,19 @@ export function applyMacroParams(macro: Macro, params: Record<string, string>): 
     return { tool: s.tool, ...(s.action ? { action: s.action } : {}), input };
   });
   return { macro: { ...macro, steps }, missing: [...missing] };
+}
+
+/**
+ * Does any parameterizable field of this step carry a `{{param}}`?
+ * `--heal --commit` refuses to rewrite such a step — the repair was
+ * recorded with this run's values baked in, and committing it would
+ * silently drop the placeholder. Pure.
+ */
+export function stepHasPlaceholder(step: MacroStep): boolean {
+  return PARAM_FIELDS.some((f) => {
+    const v = step.input[f];
+    return typeof v === 'string' && new RegExp(PLACEHOLDER_RE.source).test(v);
+  });
 }
 
 /**

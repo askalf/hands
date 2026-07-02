@@ -525,10 +525,25 @@ program
   .option('--dry-run', 'Print the steps without executing them.')
   .option('--export <file>', 'Compile the macro to a .sh / .ps1 script at <file> instead of replaying it.')
   .option('--stop-on-error', 'Halt on the first failing step (default: keep going).')
+  .option('--heal', 'Self-healing replay: a failing step brings the model back to repair JUST that step (SDK mode, bounded turns — route through dario to keep it $0), then the replay continues.')
+  .option('--commit', 'With --heal: write the repaired steps back into the macro, so the next play replays the fix deterministically at $0.')
+  .option('--warden', "With --heal: gate the healer's tool calls through warden's policy firewall (red prompts when a TTY is attached; fails closed unattended).")
   .action(async (name, opts) => {
     const setParsed = parseSetPairs(opts.set);
     if (!setParsed.ok) {
       setParsed.errors.forEach((e) => output.error(e));
+      process.exit(1);
+    }
+    if (opts.heal && opts.dryRun) {
+      output.error('--heal and --dry-run are mutually exclusive: a dry-run executes nothing, so nothing can fail or be healed.');
+      process.exit(1);
+    }
+    if (opts.commit && !opts.heal) {
+      output.error('--commit only works with --heal: there is nothing to commit unless a failing step gets repaired.');
+      process.exit(1);
+    }
+    if (opts.warden && !opts.heal) {
+      output.error('--warden on play only gates the healer — pass --heal too. (Deterministic replay already runs behind the guardrail blocklist.)');
       process.exit(1);
     }
     if (opts.export) {
@@ -551,6 +566,9 @@ program
       params: setParsed.params,
       dryRun: !!opts.dryRun,
       stopOnError: !!opts.stopOnError,
+      heal: !!opts.heal,
+      commit: !!opts.commit,
+      warden: !!opts.warden,
     });
     if (res.failed > 0) process.exitCode = 2;
   });
@@ -674,6 +692,8 @@ program
   .option('--every <interval>', 'Fire on a timer: 30s, 5m, 2h (or bare ms).')
   .option('--do <task>', 'Run this hands task on each fire (LLM). {{file}}/{{clip}}/{{match}} are substituted in.')
   .option('--play <macro>', 'Replay this recorded macro on each fire — zero LLM.')
+  .option('--heal', 'With --play: a failing macro step brings the model back to repair it, then the replay continues (SDK mode; route through dario to keep it $0).')
+  .option('--commit', 'With --play --heal: write repaired steps back into the macro — the automation converges back to $0 replays after drift.')
   .option('--interval <ms>', 'Poll interval in ms for file/clipboard/command triggers (default 2000).', '2000')
   .option('--max <n>', 'Stop after N fires.')
   .option('--once', 'Fire once, then exit.')
@@ -707,6 +727,25 @@ program
       output.error('Pick exactly one action: --do "<task>" or --play <macro>.');
       process.exit(1);
     }
+    if ((opts.heal || opts.commit) && !opts.play) {
+      output.error('--heal repairs macro replays — use it with --play <macro>. (A --do task already runs the model.)');
+      process.exit(1);
+    }
+    if (opts.commit && !opts.heal) {
+      output.error('--commit only works with --heal: there is nothing to commit unless a failing step gets repaired.');
+      process.exit(1);
+    }
+    if (opts.heal) {
+      // A watcher can run for days — discovering missing SDK credentials at
+      // 3am, on the fire that needed a repair, is too late. Fail at start.
+      const { loadConfig } = await import('./util/config.js');
+      const { hasSdkCredentials } = await import('./run.js');
+      if (!hasSdkCredentials((await loadConfig()).apiKey)) {
+        output.error('--heal runs repairs in SDK mode, and no API key is configured.');
+        output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --heal.');
+        process.exit(1);
+      }
+    }
 
     let max: number | undefined;
     if (opts.max !== undefined) {
@@ -726,6 +765,8 @@ program
       ...(max ? { max } : {}),
       once: !!opts.once,
       noDario: opts.dario === false,
+      heal: !!opts.heal,
+      commit: !!opts.commit,
     });
   });
 

@@ -7,7 +7,9 @@
 //
 // Every replayed call passes the same guardrail blocklist as a live run and
 // is appended to ~/.hands/audit.jsonl (mode left as sdk). The model is never
-// invoked.
+// invoked — unless `--heal` is set, in which case a FAILED step brings it
+// back for a bounded repair of just that step (see heal.ts), and `--commit`
+// crystallizes the fix back into the macro.
 
 import { execSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -20,7 +22,11 @@ import { getScreenSize } from './platform/screen-info.js';
 import { enumerateUiElements, findElements, elementCenter } from './ui.js';
 import { checkCommand } from './util/guardrails.js';
 import { appendAudit } from './util/audit.js';
-import { loadMacro, applyMacroParams, previewStep, type Macro, type MacroStep } from './macros.js';
+import {
+  loadMacro, saveMacro, applyMacroParams, stepHasPlaceholder, previewStep,
+  type Macro, type MacroStep,
+} from './macros.js';
+import type { Healer, StepRepair } from './heal.js';
 import * as output from './util/output.js';
 
 const SCREENSHOT_MAX_WIDTH = 1280; // must match sdk-mode / screenshot.ts
@@ -31,12 +37,20 @@ export interface PlayOptions {
   dryRun?: boolean | undefined;
   /** Stop the whole replay on the first failing step (default: continue). */
   stopOnError?: boolean | undefined;
+  /** On a failing step, bring the model back to repair JUST that step (SDK mode, bounded turns), then continue the replay. */
+  heal?: boolean | undefined;
+  /** With heal: write repaired steps back into the macro after the replay. Steps carrying `{{params}}` are never rewritten. */
+  commit?: boolean | undefined;
+  /** With heal: gate the healer's tool calls through warden's policy firewall. */
+  warden?: boolean | undefined;
 }
 
 export interface PlayResult {
   ran: number;
   failed: number;
   skipped: number;
+  /** Steps a failing replay repaired via --heal. */
+  healed: number;
 }
 
 /** Execute a saved macro deterministically. Returns per-step tallies. */
@@ -50,35 +64,121 @@ export async function playMacro(name: string, opts: PlayOptions = {}): Promise<P
     process.exit(1);
   }
 
+  // Wire the healer BEFORE any step runs — missing SDK credentials should
+  // fail fast, not surface after half the macro has already fired.
+  let healer: Healer | undefined;
+  if (opts.heal && !opts.dryRun) {
+    const { createHealer } = await import('./heal.js');
+    healer = await createHealer({ ...(opts.warden ? { warden: true } : {}) });
+    output.info(`heal armed — a failing step brings the model back for a bounded repair${opts.commit ? ', repairs commit back to the macro' : ''}.`);
+  }
+
   const scaleFactor = await coordinateScale(applied);
 
   output.header(`play macro: ${name}${applied.prompt ? ` — ${applied.prompt}` : ''} (${applied.steps.length} steps, no LLM)`);
 
-  const result: PlayResult = { ran: 0, failed: 0, skipped: 0 };
-  for (let i = 0; i < applied.steps.length; i++) {
-    const step = applied.steps[i]!;
-    output.info(`▶ ${i + 1}/${applied.steps.length}  ${previewStep(step)}`);
-    if (opts.dryRun) {
-      result.skipped++;
-      continue;
+  const result: PlayResult = { ran: 0, failed: 0, skipped: 0, healed: 0 };
+  const repairs: StepRepair[] = [];
+  try {
+    for (let i = 0; i < applied.steps.length; i++) {
+      const step = applied.steps[i]!;
+      output.info(`▶ ${i + 1}/${applied.steps.length}  ${previewStep(step)}`);
+      if (opts.dryRun) {
+        result.skipped++;
+        continue;
+      }
+      const start = Date.now();
+      try {
+        await runStep(step, scaleFactor);
+        await appendAudit({ tool: step.tool, action: step.action, args: { macro: name }, durationMs: Date.now() - start, ok: true });
+        result.ran++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        output.warn(`  step ${i + 1} failed: ${msg}`);
+        await appendAudit({ tool: step.tool, action: step.action, args: { macro: name }, durationMs: Date.now() - start, ok: false, error: msg.slice(0, 200) });
+        if (healer && (await tryHeal(healer, applied, i, msg, name, result, repairs))) continue;
+        result.failed++;
+        if (opts.stopOnError) break;
+      }
     }
-    const start = Date.now();
-    try {
-      await runStep(step, scaleFactor);
-      await appendAudit({ tool: step.tool, action: step.action, args: { macro: name }, durationMs: Date.now() - start, ok: true });
-      result.ran++;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      output.warn(`  step ${i + 1} failed: ${msg}`);
-      await appendAudit({ tool: step.tool, action: step.action, args: { macro: name }, durationMs: Date.now() - start, ok: false, error: msg.slice(0, 200) });
-      result.failed++;
-      if (opts.stopOnError) break;
-    }
+  } finally {
+    healer?.close();
+  }
+  const wardenSummary = healer?.summary();
+  if (wardenSummary) output.info(wardenSummary);
+
+  if (opts.commit && repairs.length > 0) {
+    await commitRepairs(macro, repairs);
+  } else if (opts.commit && result.healed > 0) {
+    output.info('nothing to commit — the healed steps fired no replacement actions (their goals were already satisfied).');
   }
 
   if (opts.dryRun) output.info(`(dry-run — ${result.skipped} steps previewed, nothing executed)`);
-  else output.success(`macro "${name}" done — ${result.ran} ran, ${result.failed} failed.`);
+  else {
+    const healedNote = result.healed > 0 ? `, ${result.healed} healed` : '';
+    output.success(`macro "${name}" done — ${result.ran} ran${healedNote}, ${result.failed} failed.`);
+  }
   return result;
+}
+
+/**
+ * Run one bounded repair. Returns true when the healer verified the step's
+ * intent (REPAIRED) — the caller then treats the step as done and moves on.
+ * A healer error (endpoint down, warden policy unreadable) is a failed
+ * heal, not a crashed replay.
+ */
+async function tryHeal(
+  healer: Healer,
+  applied: Macro,
+  index: number,
+  error: string,
+  name: string,
+  result: PlayResult,
+  repairs: StepRepair[],
+): Promise<boolean> {
+  output.info(`  ⛑ healing step ${index + 1} — bringing the model back for a bounded repair…`);
+  const start = Date.now();
+  try {
+    const outcome = await healer.heal(applied, index, error);
+    await appendAudit({ tool: 'heal', args: { macro: name, step: index + 1 }, durationMs: Date.now() - start, ok: outcome.ok, ...(outcome.ok ? {} : { error: 'healer verdict: not repaired' }) });
+    if (!outcome.ok) {
+      output.warn(`  ⛑ step ${index + 1} not healed (${outcome.turns} turns).`);
+      return false;
+    }
+    result.healed++;
+    if (outcome.steps.length > 0) repairs.push({ index, steps: outcome.steps });
+    const replaced = outcome.steps.length > 0 ? `${outcome.steps.length} replacement step${outcome.steps.length === 1 ? '' : 's'}` : 'no replacement needed';
+    output.success(`  ⛑ step ${index + 1} healed — ${replaced} (${outcome.turns} turns, $${outcome.costUsd.toFixed(4)}).`);
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    output.warn(`  ⛑ heal errored for step ${index + 1}: ${msg}`);
+    await appendAudit({ tool: 'heal', args: { macro: name, step: index + 1 }, durationMs: Date.now() - start, ok: false, error: msg.slice(0, 200) });
+    return false;
+  }
+}
+
+/**
+ * Crystallize this replay's repairs back into the macro — the next `play`
+ * replays the fixes deterministically, at $0. Repairs land in the ORIGINAL
+ * macro (placeholders in other steps survive); a repaired step that itself
+ * carries a `{{param}}` is skipped, because the recorded fix has this
+ * run's values baked in and would silently drop the placeholder.
+ */
+async function commitRepairs(macro: Macro, repairs: StepRepair[]): Promise<void> {
+  const committable: StepRepair[] = [];
+  for (const r of repairs) {
+    if (stepHasPlaceholder(macro.steps[r.index]!)) {
+      output.warn(`  not committing step ${r.index + 1}: it carries a {{param}}, and the repair was recorded with this run's values baked in. Re-parameterize after a manual edit, or re-record.`);
+    } else {
+      committable.push(r);
+    }
+  }
+  if (committable.length === 0) return;
+  const { applyRepairs } = await import('./heal.js');
+  const repaired = applyRepairs(macro, committable);
+  const path = await saveMacro({ ...repaired, repairedAt: Date.now() }, { force: true });
+  output.success(`committed ${committable.length} repair${committable.length === 1 ? '' : 's'} → ${path} (next play replays them at $0).`);
 }
 
 /** Compute the screenshot→screen scale factor, only if the macro has clicks. */
