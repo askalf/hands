@@ -162,6 +162,48 @@ test('agent loop: --ui registers ui_tree + click_element and the UI instruction'
   assert.match(client.requests[0].system, /UI TARGETING/);
 });
 
+test('agent loop: --guard denies a click_element → no click fires, model sees the denial', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_c', name: 'click_element', input: { name: 'Delete all', role: 'Button' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'understood, stopping' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const { guard, asked } = scriptedGuard(['d']);
+  // The guard gate sits BEFORE tree enumeration, so a denied click never
+  // touches UIAutomation — which is also what makes this test platform-safe.
+  const result = await runSdkMode('click delete all', CONFIG, { testClient: client, testScreen: SCREEN, ui: true, guard });
+  assert.equal(guard.denied, 1);
+  assert.equal(asked.length, 1, 'a semantic click is state-changing → exactly one prompt');
+  assert.match(asked[0], /click element: "Delete all" \[Button\]/, 'prompt shows the semantic target');
+  assert.equal(result.text, 'understood, stopping');
+  const second = client.requests[1];
+  const tr = second.messages.find((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_result'));
+  assert.ok(tr, 'denial must come back as a tool_result');
+  assert.match(tr.content[0].content.map((c) => c.text).join(' '), /DENIED/);
+});
+
+test('agent loop: --guard quit at a click_element aborts the run', async () => {
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_c', name: 'click_element', input: { name: 'OK' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'should not reach' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const { guard } = scriptedGuard(['q']);
+  const result = await runSdkMode('click ok', CONFIG, { testClient: client, testScreen: SCREEN, ui: true, guard });
+  assert.equal(client.requests.length, 1, 'aborted before the second API call');
+  assert.match(result.text, /aborted/i);
+});
+
+test('agent loop: a denied click_element is NOT recorded into a macro', async () => {
+  const { MacroRecorder } = await import('../dist/macros.js');
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_c', name: 'click_element', input: { name: 'Submit' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const { guard } = scriptedGuard(['d']);
+  const recorder = new MacroRecorder();
+  await runSdkMode('click submit', CONFIG, { testClient: client, testScreen: SCREEN, ui: true, guard, recorder });
+  assert.equal(recorder.steps.length, 0, 'denied click must not become a macro step');
+});
+
 test('agent loop: tool_use turn → tool_result fed back → end_turn finishes', async () => {
   const client = scriptedClient([
     {

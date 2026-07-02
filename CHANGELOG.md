@@ -11,6 +11,20 @@ checklist.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-01
+
+Semantic clicks become first-class. v0.14.0's `--ui` shipped with a caveat — UI clicks bypassed `--guard` and never made it into macros. Both gaps close here, and macros gain their most robust step type: a **semantic replay** that re-finds its target by name in the live accessibility tree, wherever the control sits now. Minor-version bump for the new behavior.
+
+PR in this release: #103 (UI first-class); also ships #99 (`hands audit stats`, below).
+
+### Changed — `--ui` clicks are guard-gated, recordable, and replayable
+
+- **`--guard` now pauses on `click_element`** like any other state-changing action — and the gate sits *before* the accessibility tree is enumerated, so a denied click never touches UIAutomation. `[e]dit` at the prompt retargets the click by name (the role rides along). `ui_tree` is explicitly classified read-only: no prompt, consistent with screenshot / `read_page`.
+- The guard preview renders the semantic target (`click element: "Save" [Button]`) — which also improves the `--warden` red-tier approval prompt, since it reuses the same preview.
+- **`--record` captures successful semantic clicks**, storing the *resolved* target (exact name + role) rather than the model's query, so replay exact-name-matches first. A guard-denied click is never recorded.
+- **`hands play` replays semantic clicks by name**: the control is re-resolved in the live tree and clicked wherever it is *now* — no stale coordinates. Coordinate clicks replay best-effort; semantic clicks survive layout shifts. `{{param}}` substitution works on the target name (`hands play settings --set tab=Privacy`), and `--export` comments these steps with their target name.
+- 9 new tests (336 total): guard classification/preview/edit for the UI tools; sdk-loop integration for deny (executor skipped, model told why), quit-abort, and no-record-on-deny — all platform-safe because the deny path precedes enumeration; macro recordability/params/preview/export.
+
 ### Added — `hands audit stats`: roll the audit log up
 
 - New read-only subcommand **`hands audit stats`** (shipped in #99) summarizes `~/.hands/audit.jsonl` instead of scrolling it: overall success rate, an ok/failed and sdk/cli split, a per-tool breakdown with average latency, and the most recent failures. `--since <90s|30m|24h|7d>` scopes to a recent window; `--mode` / `--tool` reuse the exact filter `audit list` uses; `--json` emits the stats (with a derived `successRate`) for scripts. Backed by `src/audit-stats.ts` (pure aggregation + renderers, 13 tests).

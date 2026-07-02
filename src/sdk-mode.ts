@@ -255,7 +255,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
           } else if (block.name === 'ui_tree') {
             result = await executeUiTree(block.input as Record<string, unknown>);
           } else if (block.name === 'click_element') {
-            result = await executeClickElement(block.input as Record<string, unknown>, { dryRun: opts.dryRun });
+            result = await executeClickElement(block.input as Record<string, unknown>, { dryRun: opts.dryRun, guard: opts.guard, recorder: opts.recorder });
           } else {
             result = await executeComputerAction(block.name, block.input as Record<string, unknown>, scaleFactor, { dryRun: opts.dryRun, guard: opts.guard, recorder: opts.recorder });
           }
@@ -625,13 +625,38 @@ async function executeUiTree(input: Record<string, unknown>): Promise<Array<{ ty
  */
 async function executeClickElement(
   input: Record<string, unknown>,
-  opts: { dryRun?: boolean | undefined } = {},
+  opts: { dryRun?: boolean | undefined; guard?: GuardController | undefined; recorder?: MacroRecorder | undefined } = {},
 ): Promise<Array<{ type: string; text?: string }>> {
-  const name = typeof input['name'] === 'string' ? input['name'] : '';
-  const role = typeof input['role'] === 'string' ? input['role'] : undefined;
+  let effInput = input;
+  let name = typeof effInput['name'] === 'string' ? effInput['name'] : '';
+  let role = typeof effInput['role'] === 'string' ? effInput['role'] : undefined;
   if (!name.trim()) {
     return [{ type: 'text', text: "click_element needs a `name` — the control's visible label." }];
   }
+
+  // Guarded mode: a semantic click changes host state just like a coordinate
+  // click, so it pauses for the same [a]llow/[d]eny decision — before the
+  // tree is even enumerated, so a denied click never touches UIAutomation.
+  // An [e]dit retargets the click by name.
+  if (opts.guard) {
+    const decision = await opts.guard.decide({
+      tool: 'click_element',
+      input: effInput,
+      preview: previewToolUse('click_element', effInput),
+    });
+    if (decision.kind === 'abort') throw new GuardAbort();
+    if (decision.kind === 'deny') {
+      output.warn(`[denied] ${previewToolUse('click_element', effInput)}`);
+      await appendAudit({ tool: 'click_element', args: { name, role }, durationMs: 0, ok: false, error: 'denied by operator (guard)' });
+      return [{ type: 'text', text: `The operator DENIED this action: ${previewToolUse('click_element', effInput)}. Do not retry it — choose a different approach, or stop and report that you were blocked.` }];
+    }
+    if (decision.input) {
+      effInput = decision.input;
+      name = typeof effInput['name'] === 'string' ? effInput['name'] : name;
+      role = typeof effInput['role'] === 'string' ? effInput['role'] : role;
+    }
+  }
+
   output.action('click_element', `${name}${role ? ` [${role}]` : ''}`);
   const start = Date.now();
   try {
@@ -650,6 +675,10 @@ async function executeClickElement(
     }
     await mouseClick(x, y, 'left');
     await appendAudit({ tool: 'click_element', args: { name: target.name, role: target.role }, durationMs: Date.now() - start, ok: true });
+    // Record the RESOLVED target, not the query — replay re-finds it by
+    // exact name wherever it sits, which survives layout shifts that would
+    // break a recorded coordinate.
+    opts.recorder?.record('click_element', undefined, { name: target.name, role: target.role });
     const note = matches.length > 1 ? ` (${matches.length} matched; clicked the best.)` : '';
     return [{ type: 'text', text: `Clicked ${describeElement(target)} at (${x}, ${y}).${note} Verify with a screenshot or ui_tree.` }];
   } catch (err) {

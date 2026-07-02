@@ -70,7 +70,10 @@ export function isRecordable(tool: string, action: string | undefined, input: Re
   if (tool === 'bash') return typeof input['command'] === 'string' && input['command'].length > 0;
   if (tool === 'str_replace_based_edit_tool') return input['command'] !== 'view';
   if (tool === 'computer') return action !== undefined && EFFECTFUL_COMPUTER.has(action);
-  return false; // read_page / find_files / unknown — not effectful
+  // Semantic clicks (--ui) replay by NAME, not coordinates — the most
+  // layout-shift-resistant step a macro can hold.
+  if (tool === 'click_element') return typeof input['name'] === 'string' && input['name'].length > 0;
+  return false; // read_page / find_files / ui_tree / unknown — not effectful
 }
 
 /**
@@ -89,7 +92,7 @@ export class MacroRecorder {
 // ── pure: parameters ────────────────────────────────────────────────
 
 /** Fields whose string value carries a `{{param}}` worth substituting. */
-const PARAM_FIELDS = ['command', 'text', 'file_text', 'path', 'new_str', 'old_str'];
+const PARAM_FIELDS = ['command', 'text', 'file_text', 'path', 'new_str', 'old_str', 'name'];
 
 /**
  * Substitute `{{key}}` / `{{key=default}}` across a macro's parameterizable
@@ -157,7 +160,9 @@ export function macroToScript(
       }
       scriptable++;
     } else {
-      const desc = step.action ? `${step.tool}:${step.action}` : step.tool;
+      const desc = step.tool === 'click_element'
+        ? `click_element "${String(step.input['name'] ?? '')}"`
+        : step.action ? `${step.tool}:${step.action}` : step.tool;
       lines.push(`# [manual] ${desc} — not portably scriptable; replay with: hands play ${macro.name}`);
       manual++;
     }
@@ -179,6 +184,10 @@ export function previewStep(step: MacroStep): string {
     if (step.action === 'type' || step.action === 'key') return `computer ${step.action}: ${String(step.input['text'] ?? '')}`;
     const c = step.input['coordinate'];
     return Array.isArray(c) ? `computer ${step.action} @ (${c[0]}, ${c[1]})` : `computer ${step.action ?? ''}`;
+  }
+  if (step.tool === 'click_element') {
+    const role = typeof step.input['role'] === 'string' ? ` [${step.input['role']}]` : '';
+    return `click element: "${String(step.input['name'] ?? '')}"${role}`;
   }
   return step.tool;
 }

@@ -1,7 +1,9 @@
 // Deterministic macro replay — `hands play <name>`. Re-executes a recorded
 // tool-call sequence with ZERO model calls. Bash and file edits are the
 // deterministic backbone; coordinate clicks replay best-effort (scaled to
-// the current screen, so they assume roughly the same layout as recording).
+// the current screen, so they assume roughly the same layout as recording);
+// semantic clicks (click_element, from --ui runs) re-resolve their target
+// by NAME in the live accessibility tree, so they survive layout shifts.
 //
 // Every replayed call passes the same guardrail blocklist as a live run and
 // is appended to ~/.hands/audit.jsonl (mode left as sdk). The model is never
@@ -15,6 +17,7 @@ import {
 } from './platform/mouse.js';
 import { keyboardType, keyboardKey, keyboardHoldKey } from './platform/keyboard.js';
 import { getScreenSize } from './platform/screen-info.js';
+import { enumerateUiElements, findElements, elementCenter } from './ui.js';
 import { checkCommand } from './util/guardrails.js';
 import { appendAudit } from './util/audit.js';
 import { loadMacro, applyMacroParams, previewStep, type Macro, type MacroStep } from './macros.js';
@@ -107,7 +110,28 @@ async function runStep(step: MacroStep, scaleFactor: number): Promise<void> {
     await runComputerStep(step, scaleFactor);
     return;
   }
+  if (step.tool === 'click_element') {
+    await runClickElementStep(step);
+    return;
+  }
   throw new Error(`unsupported macro tool: ${step.tool}`);
+}
+
+/**
+ * Replay a semantic click: re-resolve the control by name (and role) in the
+ * live accessibility tree and click its center. The control is found
+ * wherever it sits NOW — no stale coordinates. Windows-only for now, like
+ * the --ui tools that record these steps.
+ */
+async function runClickElementStep(step: MacroStep): Promise<void> {
+  const name = step.input['name'];
+  if (typeof name !== 'string' || !name.trim()) throw new Error('click_element step missing name');
+  const role = typeof step.input['role'] === 'string' ? step.input['role'] : undefined;
+  const els = await enumerateUiElements();
+  const matches = findElements(els, { name, ...(role ? { role } : {}) });
+  if (matches.length === 0) throw new Error(`no control matching "${name}"${role ? ` [${role}]` : ''} in the active window`);
+  const { x, y } = elementCenter(matches[0]!);
+  await mouseClick(x, y, 'left');
 }
 
 async function runEditStep(step: MacroStep): Promise<void> {

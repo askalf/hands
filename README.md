@@ -406,7 +406,7 @@ hands play nightly --export nightly.ps1   # .ps1 on Windows, .sh elsewhere
 hands macro list / show nightly / rm nightly
 ```
 
-- **Only effectful steps are recorded** — bash, file edits, clicks, keystrokes. Screenshots, `read_page`, `find_files`, cursor moves and `view` are skipped. Bash and file edits are the deterministic backbone (bash replays behind the same guardrail blocklist); coordinate clicks replay best-effort, scaled to the current screen.
+- **Only effectful steps are recorded** — bash, file edits, clicks, keystrokes. Screenshots, `read_page`, `find_files`, `ui_tree`, cursor moves and `view` are skipped. Bash and file edits are the deterministic backbone (bash replays behind the same guardrail blocklist); coordinate clicks replay best-effort, scaled to the current screen; semantic clicks from `--ui` runs (v0.15.0) replay by **name** — re-resolved in the live accessibility tree, wherever the control sits now.
 - Capture happens at the SDK dispatch site (like `--guard`/`--warden`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
 - **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
 
@@ -423,7 +423,8 @@ $ hands run --ui "open the File menu and click Save"
 
 - **`ui_tree`** lists the active window's named controls (name, role, position) — a semantic view, no screenshot. **`click_element(name, role?)`** clicks a control by its visible name; no coordinates, so it survives layout changes. No unambiguous match → it returns the candidates.
 - The system prompt tells the agent to **prefer** these over pixel clicking when a control has a name, and screenshot only for what the tree doesn't expose.
-- Windows uses UIAutomation via a signed PowerShell host (no `.ps1`, no unsigned native code). macOS (AX) / Linux (AT-SPI) aren't wired yet and say so. SDK-mode tools, so `--ui` forces SDK mode. Experimental; very high-DPI displays may need verification.
+- **First-class across hands' safety and macro surfaces** (v0.15.0): a semantic click pauses at the `--guard` prompt like any other state-changing action (with `[e]dit` to retarget by name, and denial *before* the tree is even read), flows through the `--warden` policy gate, records into `--record` macros, and replays via `hands play` — by name, zero-LLM.
+- Windows uses UIAutomation via a signed PowerShell host (no `.ps1`, no unsigned native code). macOS (AX) / Linux (AT-SPI) aren't wired yet and say so. SDK-mode tools, so `--ui` forces SDK mode. Very high-DPI displays may need verification.
 
 ### Watchers — reactive computer use
 

@@ -41,6 +41,11 @@ test('classifyToolUse — read_page / find_files are read-only; bash + unknown a
   assert.equal(classifyToolUse('something_new', {}), 'state-changing');
 });
 
+test('classifyToolUse — ui_tree is read-only; click_element is state-changing', () => {
+  assert.equal(classifyToolUse('ui_tree', { filter: 'save' }), 'read-only');
+  assert.equal(classifyToolUse('click_element', { name: 'Save' }), 'state-changing');
+});
+
 // ── previewToolUse ──────────────────────────────────────────────────
 
 test('previewToolUse — renders a readable one-liner per tool', () => {
@@ -48,6 +53,8 @@ test('previewToolUse — renders a readable one-liner per tool', () => {
   assert.match(previewToolUse('computer', { action: 'type', text: 'hello world' }), /computer type: hello world/);
   assert.match(previewToolUse('computer', { action: 'left_click', coordinate: [100, 200] }), /computer left_click @ \(100, 200\)/);
   assert.match(previewToolUse('str_replace_based_edit_tool', { command: 'create', path: '/tmp/x' }), /edit create: \/tmp\/x/);
+  assert.equal(previewToolUse('click_element', { name: 'Save', role: 'Button' }), 'click element: "Save" [Button]');
+  assert.equal(previewToolUse('click_element', { name: 'File' }), 'click element: "File"');
 });
 
 test('previewToolUse — collapses whitespace and truncates long commands', () => {
@@ -153,6 +160,23 @@ test('decide — empty edit keeps the original command', async () => {
   const d = await g.decide(call({ input: { command: 'ls -la' }, preview: 'bash: ls -la' }));
   assert.equal(d.kind, 'allow');
   assert.equal(d.input.command, 'ls -la');
+});
+
+test('decide — edit a click_element retargets the click by name', async () => {
+  const io = makeIo(['e', 'Save As']);
+  const g = new GuardController(io);
+  const d = await g.decide(call({ tool: 'click_element', action: undefined, input: { name: 'Save', role: 'Button' }, preview: 'click element: "Save" [Button]' }));
+  assert.equal(d.kind, 'allow');
+  assert.equal(d.input.name, 'Save As');
+  assert.equal(d.input.role, 'Button', 'role rides along untouched');
+});
+
+test('decide — empty click_element edit keeps the original target', async () => {
+  const io = makeIo(['e', '']);
+  const g = new GuardController(io);
+  const d = await g.decide(call({ tool: 'click_element', action: undefined, input: { name: 'Save' }, preview: 'click element: "Save"' }));
+  assert.equal(d.kind, 'allow');
+  assert.equal(d.input.name, 'Save');
 });
 
 test('decide — edit on a non-editable action re-prompts, then honors the next choice', async () => {
