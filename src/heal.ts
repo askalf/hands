@@ -13,6 +13,7 @@
 // the healer factory that wires config, dario routing, credentials, and the
 // optional warden gate. The replay loop that calls it lives in macro-run.ts.
 
+import Anthropic from '@anthropic-ai/sdk';
 import { loadConfig, type AgentConfig } from './util/config.js';
 import { autoDetectDario } from './dario-detect.js';
 import { hasSdkCredentials } from './run.js';
@@ -24,10 +25,12 @@ import * as output from './util/output.js';
 
 /**
  * A repair is scoped to ONE step, so it gets a fraction of a full run's
- * turn budget. Enough for a screenshot loop or two around a fix; not
- * enough to wander off and redo the whole task.
+ * turn budget. Enough to explore around a fix and still have the final
+ * text turn the verdict rides on (a repair that runs out of turns after
+ * executing the fix but before saying REPAIRED counts as failed — seen
+ * live at 15); not enough to wander off and redo the whole task.
  */
-export const HEAL_MAX_TURNS = 15;
+export const HEAL_MAX_TURNS = 20;
 
 /** How much of the failing step's raw input the healer gets to see. */
 const MAX_INPUT_CHARS = 2000;
@@ -58,6 +61,8 @@ export function buildHealPrompt(macro: Macro, failedIndex: number, error: string
   lines.push(`The error: ${error.length > MAX_ERROR_CHARS ? error.slice(0, MAX_ERROR_CHARS) + '… (truncated)' : error}`);
   lines.push('');
   lines.push(`Achieve step ${failedIndex + 1}'s intent in the current environment. Rules:`);
+  lines.push('- Start from the failing step\'s own input — the paths, names, and flags it used. The fix is usually nearby (a renamed file in the same folder, a moved control, a changed flag). Do not explore broadly.');
+  lines.push('- Your turn budget is small. Once the step\'s intent is verified, state your verdict IMMEDIATELY — running out of turns before the verdict counts as a failed repair.');
   lines.push('- Do ONLY this step\'s work. The ○ steps replay automatically after you finish — do not do them.');
   lines.push('- Every effectful action that succeeds (bash, file edits, clicks, keystrokes) is recorded as the step\'s repair and will be replayed on future runs. Explore with the read-only tools (find_files, read_page, ui_tree, screenshot) — use effectful actions only for the fix itself.');
   lines.push('- Prefer the smallest fix: a corrected version of the same action beats a new approach.');
@@ -77,6 +82,66 @@ export function parseHealVerdict(text: string): boolean {
   const tail = text.trim().slice(-200).toUpperCase();
   if (tail.includes('COULD-NOT-REPAIR')) return false;
   return tail.includes('REPAIRED');
+}
+
+// ── pure: repair distillation ───────────────────────────────────────
+
+/**
+ * The healer's successful effectful trajectory includes exploration —
+ * directory listings, version checks — that succeeded and so got
+ * recorded. Distillation asks the model ONE tool-less question: which of
+ * these effects must replay to reproduce the repair? Build that
+ * question. Pure.
+ */
+export function buildDistillPrompt(macro: Macro, failedIndex: number, steps: MacroStep[]): string {
+  const lines: string[] = [];
+  lines.push(`A failed step of the automation "${macro.name}"${macro.prompt ? ` (task: "${macro.prompt}")` : ''} was just repaired.`);
+  lines.push(`The broken step was: ${previewStep(macro.steps[failedIndex]!)}`);
+  lines.push('');
+  lines.push('The repair fired these effectful actions, in order:');
+  for (let i = 0; i < steps.length; i++) {
+    const raw = JSON.stringify(steps[i]!.input);
+    lines.push(`  ${i + 1}. ${previewStep(steps[i]!)}`);
+    lines.push(`     input: ${raw.length > 500 ? raw.slice(0, 500) + '… (truncated)' : raw}`);
+  }
+  lines.push('');
+  lines.push('These actions will be saved and REPLAYED VERBATIM on every future run of the automation, in place of the broken step. Which must be kept so the replay reproduces the repair?');
+  lines.push('- Keep an action only if its EFFECT is required — commands that were run to look around (directory listings, file reads, version or existence checks, echoes for inspection) are not.');
+  lines.push('- Keep every action you are unsure about.');
+  lines.push('- Reply with ONLY a JSON object of 1-based indices, e.g. {"keep":[2,3]}. An empty list means no effect needs to replay.');
+  return lines.join('\n');
+}
+
+/**
+ * Parse the distiller's reply into 0-based step indices to keep —
+ * deduplicated, in order. Accepts `{"keep":[…]}` or a bare array,
+ * tolerating prose around the JSON. Returns null on anything invalid or
+ * out of range: the caller MUST fail open (keep every step) — a garbled
+ * reply must never shrink a repair. Pure.
+ */
+export function parseDistillReply(text: string, stepCount: number): number[] | null {
+  const objStart = text.indexOf('{');
+  const objEnd = text.lastIndexOf('}');
+  const arrStart = text.indexOf('[');
+  const arrEnd = text.lastIndexOf(']');
+  let candidate: string | undefined;
+  if (objStart !== -1 && objEnd > objStart) candidate = text.slice(objStart, objEnd + 1);
+  else if (arrStart !== -1 && arrEnd > arrStart) candidate = text.slice(arrStart, arrEnd + 1);
+  if (!candidate) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+  const list = Array.isArray(parsed) ? parsed : (parsed as Record<string, unknown>)['keep'];
+  if (!Array.isArray(list)) return null;
+  const kept = new Set<number>();
+  for (const v of list) {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > stepCount) return null;
+    kept.add(v - 1);
+  }
+  return [...kept].sort((a, b) => a - b);
 }
 
 // ── pure: rewriting the macro ───────────────────────────────────────
@@ -183,6 +248,40 @@ export async function createHealer(opts: CreateHealerOptions = {}): Promise<Heal
     );
   }
 
+  // Distillation reuses the run's endpoint (dario when detected) and the
+  // same client shape the SDK loop uses, so the test hook covers it too.
+  const distillClient = opts.testHooks?.testClient
+    ?? (config.apiKey ? new Anthropic({ apiKey: config.apiKey }) : new Anthropic());
+
+  /**
+   * One tool-less model call: which of the repair's effects must replay?
+   * FAIL OPEN on any error or unusable reply — a garbled distillation
+   * must never shrink a repair. And even a wrong drop self-corrects: the
+   * step fails on the next play and heals again.
+   */
+  async function distill(macro: Macro, failedIndex: number, steps: MacroStep[]): Promise<MacroStep[]> {
+    try {
+      const response = await distillClient.beta.messages.create({
+        model: healConfig.model,
+        max_tokens: 500,
+        messages: [{ role: 'user', content: buildDistillPrompt(macro, failedIndex, steps) }],
+      }) as { content?: Array<{ type: string; text?: string }> };
+      const text = (response.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n');
+      const keep = parseDistillReply(text, steps.length);
+      if (keep === null) {
+        output.warn('  ⛑ distillation reply unusable — keeping the full repair trajectory.');
+        return steps;
+      }
+      if (keep.length < steps.length) {
+        output.info(`  ⛑ distilled repair: kept ${keep.length} of ${steps.length} step${keep.length === 1 ? '' : 's'} (dropped ${steps.length - keep.length} inspection-only).`);
+      }
+      return keep.map((i) => steps[i]!);
+    } catch (err) {
+      output.warn(`  ⛑ distillation errored (${err instanceof Error ? err.message : String(err)}) — keeping the full repair trajectory.`);
+      return steps;
+    }
+  }
+
   return {
     async heal(macro, failedIndex, error) {
       const recorder = new MacroRecorder();
@@ -196,9 +295,15 @@ export async function createHealer(opts: CreateHealerOptions = {}): Promise<Heal
         ...(opts.testHooks?.testClient ? { testClient: opts.testHooks.testClient } : {}),
         ...(opts.testHooks?.testScreen ? { testScreen: opts.testHooks.testScreen } : {}),
       });
+      const ok = parseHealVerdict(result.text);
+      // A single-step repair IS the fix; only a multi-step trajectory can
+      // carry exploration worth distilling out.
+      const steps = ok && recorder.steps.length > 1
+        ? await distill(macro, failedIndex, recorder.steps)
+        : recorder.steps;
       return {
-        ok: parseHealVerdict(result.text),
-        steps: recorder.steps,
+        ok,
+        steps,
         turns: result.turns,
         costUsd: result.costUsd,
       };

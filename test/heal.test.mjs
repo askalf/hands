@@ -16,7 +16,7 @@ process.env.HOME = fakeHome;
 process.env.USERPROFILE = fakeHome;
 process.env.HANDS_QUIET = '1';
 
-const { buildHealPrompt, parseHealVerdict, applyRepairs, createHealer, HEAL_MAX_TURNS } = await import('../dist/heal.js');
+const { buildHealPrompt, parseHealVerdict, applyRepairs, createHealer, HEAL_MAX_TURNS, buildDistillPrompt, parseDistillReply } = await import('../dist/heal.js');
 const { stepHasPlaceholder } = await import('../dist/macros.js');
 
 const MACRO = {
@@ -213,4 +213,94 @@ test('heal: a COULD-NOT-REPAIR verdict comes back ok:false with no committable s
 
 test('HEAL_MAX_TURNS: repairs are bounded well under a default full run', () => {
   assert.ok(HEAL_MAX_TURNS <= 20);
+});
+
+// ── repair distillation ─────────────────────────────────────────────
+
+const TRAJECTORY = [
+  { tool: 'bash', input: { command: 'powershell -Command "Get-ChildItem C:\\demo"' } },
+  { tool: 'bash', input: { command: 'type "C:\\demo\\report.txt"' } },
+];
+
+test('buildDistillPrompt: numbers the trajectory, states the replay contract, asks for JSON', () => {
+  const p = buildDistillPrompt(MACRO, 1, TRAJECTORY);
+  assert.match(p, /1\. bash: powershell -Command "Get-ChildItem/);
+  assert.match(p, /2\. bash: type "C:\\demo\\report\.txt"/);
+  assert.match(p, /REPLAYED VERBATIM/);
+  assert.match(p, /\{"keep":\[2,3\]\}/);
+  assert.match(p, /Keep every action you are unsure about/);
+});
+
+test('parseDistillReply: object form, bare array, prose around JSON, dedupe + order', () => {
+  assert.deepEqual(parseDistillReply('{"keep":[2]}', 2), [1]);
+  assert.deepEqual(parseDistillReply('[1, 2]', 2), [0, 1]);
+  assert.deepEqual(parseDistillReply('Keeping the fix only: {"keep":[3,1,3]}', 3), [0, 2]);
+  assert.deepEqual(parseDistillReply('{"keep":[]}', 2), []);
+});
+
+test('parseDistillReply: anything invalid or out of range → null (caller fails open)', () => {
+  assert.equal(parseDistillReply('{"keep":[3]}', 2), null, 'out of range');
+  assert.equal(parseDistillReply('{"keep":[0]}', 2), null, 'indices are 1-based');
+  assert.equal(parseDistillReply('{"keep":[1.5]}', 2), null, 'non-integer');
+  assert.equal(parseDistillReply('{"keep":"all"}', 2), null, 'not a list');
+  assert.equal(parseDistillReply('sure, keep them all', 2), null, 'no JSON at all');
+});
+
+test('heal: a multi-step repair is distilled — exploration dropped, only the fix commits', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test-not-real';
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_1', name: 'bash', input: { command: 'echo exploring' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'tool_use', id: 'tu_2', name: 'bash', input: { command: 'echo the-fix' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'Verified. REPAIRED' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+    // 4th request = the distillation call.
+    { content: [{ type: 'text', text: '{"keep":[2]}' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const healer = await createHealer({ noDario: true, testHooks: { testClient: client, testScreen: SCREEN } });
+  try {
+    const outcome = await healer.heal(MACRO, 1, 'boom');
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(outcome.steps, [{ tool: 'bash', input: { command: 'echo the-fix' } }]);
+    // The distill request is tool-less, bounded, and a plain string prompt.
+    const distillReq = client.requests[3];
+    assert.equal(distillReq.max_tokens, 500);
+    assert.equal(distillReq.tools, undefined);
+    assert.match(distillReq.messages[0].content, /REPLAYED VERBATIM/);
+  } finally {
+    healer.close();
+  }
+});
+
+test('heal: an unusable distillation reply fails OPEN — the full trajectory is kept', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test-not-real';
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_1', name: 'bash', input: { command: 'echo exploring' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'tool_use', id: 'tu_2', name: 'bash', input: { command: 'echo the-fix' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'Verified. REPAIRED' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'both of them look load-bearing to me' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const healer = await createHealer({ noDario: true, testHooks: { testClient: client, testScreen: SCREEN } });
+  try {
+    const outcome = await healer.heal(MACRO, 1, 'boom');
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.steps.length, 2, 'a garbled reply must never shrink a repair');
+  } finally {
+    healer.close();
+  }
+});
+
+test('heal: a single-step repair skips distillation entirely (no extra model call)', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-test-not-real';
+  const client = scriptedClient([
+    { content: [{ type: 'tool_use', id: 'tu_1', name: 'bash', input: { command: 'echo the-fix' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 10 } },
+    { content: [{ type: 'text', text: 'Verified. REPAIRED' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } },
+  ]);
+  const healer = await createHealer({ noDario: true, testHooks: { testClient: client, testScreen: SCREEN } });
+  try {
+    const outcome = await healer.heal(MACRO, 1, 'boom');
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.steps.length, 1);
+    assert.equal(client.requests.length, 2, 'loop made 2 requests; no distill call for a 1-step repair');
+  } finally {
+    healer.close();
+  }
 });
