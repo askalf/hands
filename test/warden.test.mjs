@@ -8,8 +8,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { WardenGate, verdictLine, createWardenGate } from '../dist/util/warden.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { WardenGate, verdictLine, createWardenGate, resolveJudgeOptions } from '../dist/util/warden.js';
 
 // The sibling warden checkout, if this repo is laid out beside it (dev box).
 // Absent in CI, where the integration test below skips.
@@ -102,6 +102,48 @@ test('gate — emits a verdict line per call; summary tallies the run', async ()
   assert.match(gate.summary(), /1 allowed/);
 });
 
+// ── judged path (--warden --judge) ──────────────────────────────────
+
+test('gate — awaits an async classifier (the judged path)', async () => {
+  const lines = [];
+  const gate = new WardenGate({
+    guardToolUse: async () => ({ tool: 'shell', tier: 'black', decision: 'block', why: ['☠ deobfuscated: recursive delete', '🧠 judge escalated → black: hidden rm'] }),
+    policy: {},
+    audit: null,
+    out: (l) => lines.push(l),
+  });
+  const o = await gate.gate({ name: 'bash', input: { command: 'X=rm; $X -rf ~' } });
+  assert.equal(o.action, 'deny');
+  assert.equal(gate.blocked, 1);
+  assert.equal(gate.escalated, 1, 'judge escalation is tallied');
+  assert.match(gate.summary(), /1 judge-escalated/);
+});
+
+test('gate — summary omits the judge tally when nothing escalated', async () => {
+  const { gate } = mkGate({ tool: 'shell', tier: 'green', decision: 'allow', why: [] });
+  await gate.gate({ name: 'bash', input: { command: 'ls' } });
+  assert.doesNotMatch(gate.summary(), /judge-escalated/);
+});
+
+test('resolveJudgeOptions — rides ANTHROPIC_BASE_URL, honors HANDS_JUDGE_MODEL, falls back on env keys', () => {
+  const full = resolveJudgeOptions(
+    { ANTHROPIC_BASE_URL: 'http://localhost:3456/', HANDS_JUDGE_MODEL: 'claude-haiku-4-5-20251001' },
+    'sk-cfg',
+  );
+  assert.equal(full.endpoint, 'http://localhost:3456', 'trailing slash trimmed');
+  assert.equal(full.apiKey, 'sk-cfg', 'config key wins');
+  assert.equal(full.model, 'claude-haiku-4-5-20251001');
+  const bare = resolveJudgeOptions({ ANTHROPIC_AUTH_TOKEN: 'tok' }, undefined);
+  assert.equal(bare.endpoint, undefined, 'no base URL → warden default endpoint');
+  assert.equal(bare.apiKey, 'tok', 'AUTH_TOKEN fallback (the dario flow)');
+  assert.equal(bare.model, undefined, 'no override → warden default model');
+  assert.equal(bare.timeoutMs, undefined, 'no override → warden default timeout');
+  assert.equal(resolveJudgeOptions({ ANTHROPIC_API_KEY: 'sk-env' }, undefined).apiKey, 'sk-env');
+  assert.equal(resolveJudgeOptions({ HANDS_JUDGE_TIMEOUT_MS: '20000' }, 'k').timeoutMs, 20000);
+  assert.equal(resolveJudgeOptions({ HANDS_JUDGE_TIMEOUT_MS: 'soon' }, 'k').timeoutMs, undefined, 'non-numeric override ignored');
+  assert.equal(resolveJudgeOptions({ HANDS_JUDGE_TIMEOUT_MS: '-5' }, 'k').timeoutMs, undefined, 'non-positive override ignored');
+});
+
 // ── real warden, loaded via HANDS_WARDEN_PATH (skips when absent) ────
 
 test('integration: real warden blocks a black command and allows a green one', { skip: !wardenAvailable }, async () => {
@@ -117,6 +159,28 @@ test('integration: real warden blocks a black command and allows a green one', {
     assert.match(black.reason, /BLOCKED/);
     const green = await gate.gate({ name: 'bash', input: { command: 'ls -la' } });
     assert.equal(green.action, 'allow', 'a benign list must pass');
+
+    // Judged path with warden's real checkAsync + a stub judge (no network):
+    // an obfuscated command is gray → the stub escalates to black → blocked.
+    const { checkAsync } = await import(pathToFileURL(join(siblingWarden, 'src', 'index.mjs')).href);
+    const { mapMcpToAction } = await import(pathToFileURL(join(siblingWarden, 'src', 'mcp.mjs')).href);
+    const lines = [];
+    const judged = new WardenGate({
+      guardToolUse: (toolUse, policy, o) =>
+        checkAsync(mapMcpToAction(toolUse.name, toolUse.input ?? {}), policy, {
+          audit: o.audit,
+          judge: async () => ({ tier: 'black', reason: 'deobfuscates to a recursive delete' }),
+        }),
+      policy: {},
+      audit: null,
+      out: (l) => lines.push(l),
+    });
+    const esc = await judged.gate({ name: 'bash', input: { command: 'X=rm; $X -rf ~/x' } });
+    assert.equal(esc.action, 'deny', 'judge-escalated black must be blocked');
+    assert.match(esc.reason, /BLOCKED/);
+    assert.equal(judged.escalated, 1);
+    const clean = await judged.gate({ name: 'bash', input: { command: 'ls -la' } });
+    assert.equal(clean.action, 'allow', 'green is never judged (not gray)');
   } finally {
     for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     rmSync(tmpHome, { recursive: true, force: true });

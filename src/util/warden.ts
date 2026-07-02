@@ -8,6 +8,8 @@
 //   red    → held for the operator (reuses the --guard prompt when a TTY is
 //            attached; fail-closed when unattended)
 //   green/yellow → allowed
+// With `--judge` on top, gray-zone calls (obfuscation, indirection) also go
+// to warden's LLM judge, which deobfuscates and can only RAISE the tier.
 // Every verdict is appended to warden's tamper-evident, hash-chained audit
 // at ~/.warden/audit.jsonl — the same log warden's other surfaces write.
 //
@@ -36,6 +38,9 @@ interface WardenAuditLog {
   record(rec: unknown): unknown;
 }
 
+/** warden's judge signature: async, returns an escalation or null. */
+export type WardenJudge = (action: unknown, verdict: WardenVerdict) => Promise<{ tier: string; reason?: string } | null>;
+
 /** The slice of warden's API the bridge calls. Loaded dynamically. */
 export interface WardenApi {
   guardToolUse(
@@ -45,6 +50,12 @@ export interface WardenApi {
   ): WardenVerdict;
   loadPolicy(path: string): unknown;
   ChainedFileAudit: new (path: string) => WardenAuditLog;
+  /** Async check that consults an optional LLM judge on gray-zone actions (escalate-only). */
+  checkAsync(action: unknown, policy: unknown, opts: { audit?: WardenAuditLog | undefined; judge?: WardenJudge | undefined }): Promise<WardenVerdict>;
+  /** Build a judge bound to an Anthropic-compatible endpoint. */
+  makeJudge(opts: { endpoint?: string | undefined; apiKey?: string | undefined; model?: string | undefined; timeoutMs?: number | undefined }): WardenJudge;
+  /** warden's tool-name → action mapper (the same one guardToolUse uses). */
+  mapMcpToAction(name: string, input: Record<string, unknown>, nameMap?: Record<string, string>): unknown;
 }
 
 /** What the SDK loop does with a tool call after warden weighs in. */
@@ -65,15 +76,20 @@ export async function loadWardenApi(): Promise<WardenApi> {
   try {
     if (base) {
       const wrap = await import(pathToFileURL(join(base, 'src', 'wrap.mjs')).href);
+      const idx = await import(pathToFileURL(join(base, 'src', 'index.mjs')).href);
       const policy = await import(pathToFileURL(join(base, 'src', 'policy.mjs')).href);
       const audit = await import(pathToFileURL(join(base, 'src', 'audit.mjs')).href);
-      return { guardToolUse: wrap.guardToolUse, loadPolicy: policy.loadPolicy, ChainedFileAudit: audit.ChainedFileAudit };
+      const judge = await import(pathToFileURL(join(base, 'src', 'judge.mjs')).href);
+      const mcp = await import(pathToFileURL(join(base, 'src', 'mcp.mjs')).href);
+      return { guardToolUse: wrap.guardToolUse, loadPolicy: policy.loadPolicy, ChainedFileAudit: audit.ChainedFileAudit, checkAsync: idx.checkAsync, makeJudge: judge.makeJudge, mapMcpToAction: mcp.mapMcpToAction };
     }
     const pkg = '@askalf/warden';
     const wrap = await import(`${pkg}/wrap`);
     const idx = await import(`${pkg}`);
     const audit = await import(`${pkg}/audit`);
-    return { guardToolUse: wrap.guardToolUse, loadPolicy: idx.loadPolicy, ChainedFileAudit: audit.ChainedFileAudit };
+    const judge = await import(`${pkg}/judge`);
+    const mcp = await import(`${pkg}/mcp`);
+    return { guardToolUse: wrap.guardToolUse, loadPolicy: idx.loadPolicy, ChainedFileAudit: audit.ChainedFileAudit, checkAsync: idx.checkAsync, makeJudge: judge.makeJudge, mapMcpToAction: mcp.mapMcpToAction };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new Error(
@@ -97,7 +113,12 @@ export function verdictLine(tool: string, v: WardenVerdict): string {
 }
 
 interface WardenGateDeps {
-  guardToolUse: WardenApi['guardToolUse'];
+  /** Classify one tool call. May be async — the judged path (`--judge`) consults an LLM. */
+  guardToolUse: (
+    toolUse: { name: string; input?: Record<string, unknown> | undefined },
+    policy: unknown,
+    opts: { audit?: WardenAuditLog | undefined },
+  ) => WardenVerdict | Promise<WardenVerdict>;
   policy: unknown;
   audit?: WardenAuditLog | undefined;
   /** Reused for the red-tier ("approve") operator prompt. Null = unattended (fail-closed). */
@@ -118,6 +139,8 @@ export class WardenGate {
   approved = 0;
   denied = 0;
   blocked = 0;
+  /** Calls where the LLM judge raised the deterministic tier (`--judge`). */
+  escalated = 0;
 
   constructor(deps: WardenGateDeps) {
     this.deps = deps;
@@ -125,7 +148,8 @@ export class WardenGate {
 
   async gate(toolUse: { name: string; input?: Record<string, unknown> | undefined }): Promise<WardenOutcome> {
     const input = (toolUse.input ?? {}) as Record<string, unknown>;
-    const v = this.deps.guardToolUse({ name: toolUse.name, input }, this.deps.policy, { audit: this.deps.audit });
+    const v = await this.deps.guardToolUse({ name: toolUse.name, input }, this.deps.policy, { audit: this.deps.audit });
+    if (v.why.some((w) => w.includes('judge escalated'))) this.escalated++;
     this.deps.out(verdictLine(toolUse.name, v));
 
     if (v.decision === 'block') {
@@ -165,8 +189,31 @@ export class WardenGate {
   }
 
   summary(): string {
-    return `warden: ${this.allowed} allowed · ${this.approved} approved · ${this.denied} denied/held · ${this.blocked} blocked`;
+    const judge = this.escalated > 0 ? ` · ${this.escalated} judge-escalated` : '';
+    return `warden: ${this.allowed} allowed · ${this.approved} approved · ${this.denied} denied/held · ${this.blocked} blocked${judge}`;
   }
+}
+
+/**
+ * Resolve the judge's endpoint/key/model/timeout from the run's
+ * environment: the same base URL the SDK loop uses (dario when detected —
+ * $0 on a Max subscription), the run's API key, and optional
+ * HANDS_JUDGE_MODEL / HANDS_JUDGE_TIMEOUT_MS overrides (defaults: warden's
+ * own judge defaults — sonnet, 8s; a slow proxy just means the fail-safe
+ * keeps the deterministic verdict). Pure.
+ */
+export function resolveJudgeOptions(
+  env: Record<string, string | undefined>,
+  apiKey: string | undefined,
+): { endpoint?: string | undefined; apiKey?: string | undefined; model?: string | undefined; timeoutMs?: number | undefined } {
+  const base = env['ANTHROPIC_BASE_URL'];
+  const timeoutMs = Number(env['HANDS_JUDGE_TIMEOUT_MS']);
+  return {
+    ...(base ? { endpoint: base.replace(/\/+$/, '') } : {}),
+    apiKey: apiKey ?? env['ANTHROPIC_API_KEY'] ?? env['ANTHROPIC_AUTH_TOKEN'],
+    ...(env['HANDS_JUDGE_MODEL'] ? { model: env['HANDS_JUDGE_MODEL'] } : {}),
+    ...(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs } : {}),
+  };
 }
 
 /**
@@ -174,9 +221,20 @@ export class WardenGate {
  * and a durable hash-chained audit (~/.warden/audit.jsonl), and build the
  * gate. `guard` supplies the red-tier prompt; pass it only when a TTY is
  * attached (otherwise red fails closed).
+ *
+ * With `judge` set (`--warden --judge`), gray-zone verdicts — obfuscated
+ * or indirect commands the deterministic rules can't fully see through —
+ * are additionally sent to warden's LLM judge, which deobfuscates and may
+ * ESCALATE the tier (never lower it). The judge rides the same endpoint
+ * as the run (dario when detected), and a judge failure keeps the
+ * deterministic verdict — warden's fail-safe, not fail-open.
  */
 export async function createWardenGate(
-  opts: { guard?: GuardController | undefined; out: (line: string) => void },
+  opts: {
+    guard?: GuardController | undefined;
+    out: (line: string) => void;
+    judge?: { apiKey?: string | undefined } | undefined;
+  },
 ): Promise<WardenGate> {
   const api = await loadWardenApi();
   const paths = wardenPaths();
@@ -187,8 +245,14 @@ export async function createWardenGate(
   }
   const policy = api.loadPolicy(paths.policy);
   const audit = new api.ChainedFileAudit(paths.audit);
+  let classify: WardenGateDeps['guardToolUse'] = api.guardToolUse;
+  if (opts.judge) {
+    const judgeFn = api.makeJudge(resolveJudgeOptions(process.env, opts.judge.apiKey));
+    classify = (toolUse, policy_, o) =>
+      api.checkAsync(api.mapMcpToAction(toolUse.name, toolUse.input ?? {}), policy_, { audit: o.audit, judge: judgeFn });
+  }
   return new WardenGate({
-    guardToolUse: api.guardToolUse,
+    guardToolUse: classify,
     policy,
     audit,
     ...(opts.guard ? { guard: opts.guard } : {}),
