@@ -10,8 +10,8 @@
 // the invocation (route through dario to keep it $0).
 //
 // Read-only calls (screenshot, zoom, mouse_move, wait, read_page,
-// find_files, text-editor `view`) never prompt — only actions that can
-// change host state do. The decision logic is split into pure functions
+// find_files, ui_tree, text-editor `view`) never prompt — only actions
+// that can change host state do. The decision logic is split into pure functions
 // (classification, preview, answer parsing) and a GuardController whose
 // terminal I/O is injected, so the prompt loop is testable without a TTY.
 
@@ -40,6 +40,9 @@ export function classifyToolUse(tool: string, input: Record<string, unknown>): T
   }
   // read_page (network GET) and find_files (disk walk) don't mutate the host.
   if (tool === 'read_page' || tool === 'find_files') return 'read-only';
+  // --ui: ui_tree only reads the accessibility tree; click_element clicks.
+  if (tool === 'ui_tree') return 'read-only';
+  if (tool === 'click_element') return 'state-changing';
   // bash and anything unrecognized: assume it changes state.
   return 'state-changing';
 }
@@ -69,6 +72,10 @@ export function previewToolUse(tool: string, input: Record<string, unknown>): st
     const cmd = String(input['command'] ?? 'edit');
     const path = input['path'] ? ` ${oneLine(input['path'], 80)}` : '';
     return `edit ${cmd}:${path}`;
+  }
+  if (tool === 'click_element') {
+    const role = typeof input['role'] === 'string' ? ` [${input['role']}]` : '';
+    return `click element: "${oneLine(input['name'], 60)}"${role}`;
   }
   return tool;
 }
@@ -156,7 +163,7 @@ export class GuardController {
       if (choice === 'edit') {
         const edited = await this.edit(call);
         if (edited) { this.allowed++; return { kind: 'allow', input: edited }; }
-        this.io.out('    (edit is only supported for bash commands and computer type/key text)\n');
+        this.io.out('    (edit is only supported for bash commands, computer type/key text, and click_element targets)\n');
         continue;
       }
       this.io.out('    ? a=allow once · d=deny · A=always allow this tool · e=edit · q=quit\n');
@@ -164,10 +171,10 @@ export class GuardController {
   }
 
   /**
-   * Prompt for an edited value. Supports the bash command and the
-   * computer type/key text — the fields where an inline tweak is
-   * meaningful. Returns the new input, or null when this call isn't
-   * editable. An empty edit keeps the original.
+   * Prompt for an edited value. Supports the bash command, the computer
+   * type/key text, and the click_element target name — the fields where
+   * an inline tweak is meaningful. Returns the new input, or null when
+   * this call isn't editable. An empty edit keeps the original.
    */
   private async edit(call: GuardCall): Promise<Record<string, unknown> | null> {
     if (call.tool === 'bash') {
@@ -179,6 +186,11 @@ export class GuardController {
       const current = typeof call.input['text'] === 'string' ? call.input['text'] : '';
       const next = await this.io.ask(`    edit text (Enter keeps "${oneLine(current, 60)}"): `);
       return next.trim() ? { ...call.input, text: next } : call.input;
+    }
+    if (call.tool === 'click_element') {
+      const current = typeof call.input['name'] === 'string' ? call.input['name'] : '';
+      const next = (await this.io.ask(`    edit target name (Enter keeps "${oneLine(current, 60)}"): `)).trim();
+      return next ? { ...call.input, name: next } : call.input;
     }
     return null;
   }

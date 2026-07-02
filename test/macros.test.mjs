@@ -58,6 +58,13 @@ test('isRecordable — captures effectful calls, skips reads', () => {
   assert.equal(isRecordable('find_files', undefined, {}), false);
 });
 
+test('isRecordable — semantic clicks record by name; ui_tree reads do not', () => {
+  assert.equal(isRecordable('click_element', undefined, { name: 'Save', role: 'Button' }), true);
+  assert.equal(isRecordable('click_element', undefined, { name: '' }), false, 'empty name not recordable');
+  assert.equal(isRecordable('click_element', undefined, {}), false);
+  assert.equal(isRecordable('ui_tree', undefined, { filter: 'save' }), false, 'tree read has no replay value');
+});
+
 // ── MacroRecorder ───────────────────────────────────────────────────
 
 test('MacroRecorder — accumulates only effectful steps, in order', () => {
@@ -82,6 +89,15 @@ test('applyMacroParams — substitutes across command/text/path fields; reports 
   assert.equal(applied.steps[0].input.command, 'deploy {{env}}');
   assert.equal(applied.steps[1].input.text, 'hi Alf');
   assert.deepEqual(missing, ['env']);
+});
+
+test('applyMacroParams — substitutes a click_element target name', () => {
+  const macro = { name: 'm', steps: [
+    { tool: 'click_element', input: { name: '{{tab=General}}', role: 'TabItem' } },
+  ] };
+  const { macro: applied, missing } = applyMacroParams(macro, { tab: 'Privacy' });
+  assert.equal(applied.steps[0].input.name, 'Privacy');
+  assert.deepEqual(missing, []);
 });
 
 // ── macroToScript (the export compiler) ─────────────────────────────
@@ -114,12 +130,23 @@ test('macroToScript — win32 emits PowerShell; GUI steps become manual comments
   assert.match(script, /# \[manual\] computer:left_click/);
 });
 
+test('macroToScript — click_element becomes a manual comment naming the target', () => {
+  const macro = { name: 'm', steps: [
+    { tool: 'click_element', input: { name: 'Save', role: 'Button' } },
+  ] };
+  const { scriptable, manual, script } = macroToScript(macro, 'win32');
+  assert.equal(scriptable, 0);
+  assert.equal(manual, 1);
+  assert.match(script, /# \[manual\] click_element "Save"/);
+});
+
 // ── previewStep ─────────────────────────────────────────────────────
 
 test('previewStep — one-liners per tool', () => {
   assert.match(previewStep({ tool: 'bash', input: { command: 'npm test' } }), /^bash: npm test/);
   assert.match(previewStep({ tool: 'computer', action: 'left_click', input: { coordinate: [5, 6] } }), /left_click @ \(5, 6\)/);
   assert.match(previewStep({ tool: 'str_replace_based_edit_tool', input: { command: 'create', path: '/x' } }), /edit create: \/x/);
+  assert.equal(previewStep({ tool: 'click_element', input: { name: 'Save', role: 'Button' } }), 'click element: "Save" [Button]');
 });
 
 // ── fs CRUD ─────────────────────────────────────────────────────────
