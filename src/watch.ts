@@ -13,7 +13,9 @@ export type WatchTrigger =
   | { kind: 'file'; glob: string }
   | { kind: 'clipboard'; pattern: string }
   | { kind: 'command'; command: string }
-  | { kind: 'interval' };
+  | { kind: 'interval' }
+  /** Daily wall-clock schedule, `at` = "HH:MM" (24h, local time). */
+  | { kind: 'schedule'; at: string };
 
 /** What to run when a trigger fires: an LLM task, or a free recorded macro. */
 export type WatchAction = { kind: 'task'; task: string } | { kind: 'macro'; name: string };
@@ -24,6 +26,15 @@ export interface WatchProbes {
   readClipboard(): Promise<string>;
   /** Resolves to the command's exit code. */
   runCommand(command: string): Promise<number>;
+  /** Wall clock, for schedule triggers. Optional so existing probe sets stay valid; defaults to the real clock. */
+  now?(): Date;
+}
+
+/** Parse a schedule's "HH:MM" (24h) into minutes-since-midnight, or null. Pure. */
+export function parseAt(s: string): number | null {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(s.trim());
+  if (!m) return null;
+  return parseInt(m[1]!, 10) * 60 + parseInt(m[2]!, 10);
 }
 
 export interface WatchHit {
@@ -68,6 +79,7 @@ export function describeTrigger(t: WatchTrigger): string {
     case 'clipboard': return `clipboard matching /${t.pattern}/`;
     case 'command': return `command exits 0: ${t.command}`;
     case 'interval': return 'every interval';
+    case 'schedule': return `daily at ${t.at}`;
   }
 }
 
@@ -85,6 +97,7 @@ export class WatchEngine {
   private seenFiles: Set<string> | null = null;
   private lastClip: string | null = null;
   private lastCommandOk = false;
+  private lastScheduleDay: string | null = null;
 
   constructor(trigger: WatchTrigger, probes: WatchProbes) {
     this.trigger = trigger;
@@ -96,6 +109,26 @@ export class WatchEngine {
     const t = this.trigger;
     if (t.kind === 'interval') {
       return { context: {} };
+    }
+    if (t.kind === 'schedule') {
+      // Fire once per local day when the clock is at/past HH:MM. Cron
+      // semantics for downtime: if the engine's FIRST look at a day is
+      // already past the mark, that day is treated as missed, not fired —
+      // a daemon started at 14:00 must not immediately run the 09:00 jobs.
+      const target = parseAt(t.at);
+      if (target === null) return null; // validated upstream; fail quiet, not loud, in the loop
+      const now = (this.probes.now ?? (() => new Date()))();
+      const day = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+      const past = now.getHours() * 60 + now.getMinutes() >= target;
+      if (this.lastScheduleDay === null) {
+        this.lastScheduleDay = past ? day : 'baseline';
+        return null;
+      }
+      if (past && this.lastScheduleDay !== day) {
+        this.lastScheduleDay = day;
+        return { context: {} };
+      }
+      return null;
     }
     if (t.kind === 'file') {
       const files = await this.probes.listFiles(t.glob);
