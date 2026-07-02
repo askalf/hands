@@ -398,7 +398,11 @@ hands run --record nightly "pull main, run the tests, and write the result to ~/
 # Replay it forever — no LLM, instant, free
 hands play nightly
 hands play nightly --dry-run        # preview the steps
-hands play nightly --set branch=dev # fill a {{branch}} you hand-added
+
+# Turn a literal into a knob — then re-aim the replay, still no LLM
+hands macro parameterize nightly branch=main
+hands play nightly                  # unchanged: branch defaults to main
+hands play nightly --set branch=dev # same run, re-aimed
 
 # Or have hands hand you the script it wrote
 hands play nightly --export nightly.ps1   # .ps1 on Windows, .sh elsewhere
@@ -408,6 +412,7 @@ hands macro list / show nightly / rm nightly
 
 - **Only effectful steps are recorded** — bash, file edits, clicks, keystrokes. Screenshots, `read_page`, `find_files`, `ui_tree`, cursor moves and `view` are skipped. Bash and file edits are the deterministic backbone (bash replays behind the same guardrail blocklist); coordinate clicks replay best-effort, scaled to the current screen; semantic clicks from `--ui` runs (v0.15.0) replay by **name** — re-resolved in the live accessibility tree, wherever the control sits now.
 - Capture happens at the SDK dispatch site (like `--guard`/`--warden`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
+- **`macro parameterize`** (v0.16.0) turns a literal value into a reusable `{{param}}` in one command: `hands macro parameterize deploy env=staging` rewrites every `staging` (never inside an existing `{{…}}`) into `{{env=staging}}`. The original value becomes the **default**, so a bare `hands play` replays byte-identically — `--set env=prod` re-aims it. A value that appears nowhere errors and saves nothing (typo protection), and `macro show` lists a macro's params.
 - **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
 
 ### Semantic UI targeting

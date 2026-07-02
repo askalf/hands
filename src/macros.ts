@@ -20,7 +20,7 @@
 import { readFile, writeFile, mkdir, readdir, unlink, chmod, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { substituteParams } from './recipes.js';
+import { substituteParams, PLACEHOLDER_RE } from './recipes.js';
 
 export interface MacroStep {
   /** Tool name: `bash`, `str_replace_based_edit_tool`, or `computer`. */
@@ -113,6 +113,87 @@ export function applyMacroParams(macro: Macro, params: Record<string, string>): 
     return { tool: s.tool, ...(s.action ? { action: s.action } : {}), input };
   });
   return { macro: { ...macro, steps }, missing: [...missing] };
+}
+
+/**
+ * The `{{params}}` a macro exposes, in first-appearance order. A key is
+ * required (no default) if ANY of its occurrences lacks one — that's the
+ * occurrence `hands play` will refuse to run without a `--set`. Pure.
+ */
+export function macroParams(macro: Macro): Array<{ key: string; def: string | undefined }> {
+  const seen = new Map<string, string | undefined>();
+  for (const step of macro.steps) {
+    for (const f of PARAM_FIELDS) {
+      const text = step.input[f];
+      if (typeof text !== 'string') continue;
+      const re = new RegExp(PLACEHOLDER_RE.source, 'g');
+      for (let m = re.exec(text); m; m = re.exec(text)) {
+        const key = m[1]!;
+        const def = m[2];
+        if (!seen.has(key) || (seen.get(key) !== undefined && def === undefined)) seen.set(key, def);
+      }
+    }
+  }
+  return [...seen.entries()].map(([key, def]) => ({ key, def }));
+}
+
+/**
+ * Replace literal `value` with `replacement` in the placeholder-free
+ * stretches of `text` — an existing `{{…}}` is never rewritten, so
+ * parameterizing "stag" can't corrupt a `{{env=staging}}`. Pure.
+ */
+function replaceOutsidePlaceholders(text: string, value: string, replacement: string): { text: string; count: number } {
+  const re = new RegExp(PLACEHOLDER_RE.source, 'g');
+  let out = '';
+  let count = 0;
+  let last = 0;
+  const sub = (segment: string): string => {
+    const parts = segment.split(value);
+    count += parts.length - 1;
+    return parts.join(replacement);
+  };
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    out += sub(text.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  out += sub(text.slice(last));
+  return { text: out, count };
+}
+
+/**
+ * Turn literal values into `{{key=value}}` placeholders — the one-command
+ * upgrade from "recorded once" to "reusable with --set". Each assignment
+ * replaces every occurrence of its value across the parameterizable
+ * string fields (never inside an existing placeholder). The original
+ * value becomes the DEFAULT, so a bare `hands play` replays the macro
+ * exactly as recorded; `--set key=other` re-aims it. Assignments apply
+ * in order. Returns the rewritten macro and a per-key occurrence count
+ * (0 = the value wasn't found — likely a typo; nothing was changed for
+ * that key). Pure — the caller decides whether to save.
+ */
+export function parameterizeMacro(macro: Macro, assignments: Record<string, string>): { macro: Macro; replaced: Record<string, number> } {
+  const replaced: Record<string, number> = {};
+  for (const [key, value] of Object.entries(assignments)) {
+    if (!/^[a-zA-Z0-9_]+$/.test(key)) throw new Error(`Invalid param key "${key}". Use letters, digits, and underscores.`);
+    if (value === '') throw new Error(`Param "${key}" needs a non-empty value to search for (key=value).`);
+    // A default lives inside {{key=…}} and the parser reads it as [^}]* —
+    // a value containing "}" could never round-trip.
+    if (value.includes('}')) throw new Error(`Param "${key}" value contains "}", which can't be stored as a {{${key}=…}} default.`);
+  }
+  const steps = macro.steps.map((s): MacroStep => ({ tool: s.tool, ...(s.action ? { action: s.action } : {}), input: { ...s.input } }));
+  for (const [key, value] of Object.entries(assignments)) {
+    let count = 0;
+    for (const step of steps) {
+      for (const f of PARAM_FIELDS) {
+        if (typeof step.input[f] !== 'string') continue;
+        const r = replaceOutsidePlaceholders(step.input[f] as string, value, `{{${key}=${value}}}`);
+        step.input[f] = r.text;
+        count += r.count;
+      }
+    }
+    replaced[key] = count;
+  }
+  return { macro: { ...macro, steps }, replaced };
 }
 
 // ── pure: export to a shell script ──────────────────────────────────

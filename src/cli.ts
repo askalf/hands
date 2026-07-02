@@ -587,7 +587,7 @@ macroCmd
   .description('Show a macro — its steps, source prompt, and on-disk path.')
   .option('--json', 'Emit the parsed macro as JSON.')
   .action(async (name, opts) => {
-    const { loadMacro, macroPath, previewStep } = await import('./macros.js');
+    const { loadMacro, macroPath, previewStep, macroParams } = await import('./macros.js');
     try {
       const macro = await loadMacro(name);
       if (opts.json) {
@@ -599,8 +599,48 @@ macroCmd
       if (macro.platform) console.log(chalk.dim('Platform:'), macro.platform);
       if (macro.createdAt) console.log(chalk.dim('Recorded:'), new Date(macro.createdAt).toISOString());
       console.log(chalk.dim('File:'), macroPath(name));
+      const params = macroParams(macro);
+      if (params.length > 0) {
+        console.log(chalk.dim('Params:'), params.map((p) => (p.def === undefined ? `{{${p.key}}}` : `{{${p.key}=${p.def}}}`)).join(' '), chalk.dim('(--set key=value)'));
+      }
       console.log();
       macro.steps.forEach((s, i) => console.log(`  ${chalk.dim(`${i + 1}.`)} ${previewStep(s)}`));
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+macroCmd
+  .command('parameterize <name> <pairs...>')
+  .description('Turn a literal value in a recorded macro into a reusable {{param}}: `hands macro parameterize deploy env=staging` rewrites every "staging" into {{env=staging}}. The original value stays as the default — a bare `hands play` is unchanged; `hands play deploy --set env=prod` re-aims it.')
+  .option('--dry-run', 'Preview the rewritten steps without saving.')
+  .action(async (name, pairs, opts) => {
+    const { loadMacro, saveMacro, parameterizeMacro, previewStep } = await import('./macros.js');
+    const setParsed = parseSetPairs(pairs);
+    if (!setParsed.ok) {
+      setParsed.errors.forEach((e) => output.error(e));
+      process.exit(1);
+    }
+    try {
+      const macro = await loadMacro(name);
+      const { macro: rewritten, replaced } = parameterizeMacro(macro, setParsed.params);
+      const misses = Object.entries(replaced).filter(([, n]) => n === 0).map(([k]) => k);
+      if (misses.length > 0) {
+        for (const k of misses) output.error(`"${setParsed.params[k]}" (param "${k}") appears nowhere in macro "${name}" — nothing saved. Check \`hands macro show ${name}\` for the exact text.`);
+        process.exit(1);
+      }
+      for (const [k, n] of Object.entries(replaced)) {
+        output.info(`{{${k}=${setParsed.params[k]}}} — ${n} occurrence${n === 1 ? '' : 's'}`);
+      }
+      console.log();
+      rewritten.steps.forEach((s, i) => console.log(`  ${chalk.dim(`${i + 1}.`)} ${previewStep(s)}`));
+      if (opts.dryRun) {
+        output.info('(dry-run — nothing saved)');
+        return;
+      }
+      await saveMacro(rewritten, { force: true });
+      output.success(`parameterized macro "${name}" — replays unchanged by default; override with: hands play ${name} ${Object.keys(replaced).map((k) => `--set ${k}=…`).join(' ')}`);
     } catch (err) {
       output.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
