@@ -11,6 +11,7 @@ import { isWhisperInstalled, setupWhisper } from './voice/index.js';
 import { runDoctor, renderDoctorText, renderDoctorJson, exitCodeFor } from './doctor.js';
 import { parseRecipeRef, parseSetPairs } from './recipes.js';
 import type { WatchTrigger, WatchAction } from './watch.js';
+import type { Job } from './jobs.js';
 import * as output from './util/output.js';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -768,6 +769,262 @@ program
       heal: !!opts.heal,
       commit: !!opts.commit,
     });
+  });
+
+// ── jobs + daemon (the automation layer) ────────────────────────────
+const jobCmd = program
+  .command('job')
+  .description('Manage persistent automations the hands daemon runs unattended (durable `hands watch`)');
+
+jobCmd
+  .command('add <name>')
+  .description('Define a job: one trigger (--on-file/--on-clipboard/--on-command/--every/--at) + one action (--do/--play). The daemon picks it up within seconds — no restart.')
+  .option('--on-file <glob>', 'Fire when a new file matching <glob> appears. Substitutes {{file}}.')
+  .option('--on-clipboard <regex>', 'Fire when the clipboard changes and matches <regex>. Substitutes {{clip}} and {{match}}.')
+  .option('--on-command <cmd>', 'Fire when <cmd> newly exits 0 (rising edge).')
+  .option('--every <interval>', 'Fire on a timer: 30s, 5m, 2h.')
+  .option('--at <HH:MM>', 'Fire once a day at HH:MM (24h, local time).')
+  .option('--do <task>', 'Run this hands task on each fire (LLM).')
+  .option('--play <macro>', 'Replay this recorded macro on each fire — zero LLM.')
+  .option('--heal', 'With --play: a failing macro step is repaired by the model (SDK mode; dario keeps it $0).')
+  .option('--commit', 'With --heal: repairs crystallize back into the macro.')
+  .option('--warden', "With --heal: gate the healer through warden's policy firewall (unattended: red fails closed).")
+  .option('--interval <ms>', 'Poll interval for file/clipboard/command triggers (default 2000).', '2000')
+  .option('--force', 'Overwrite an existing job of the same name.')
+  .action(async (name, opts) => {
+    const { parseInterval, parseAt } = await import('./watch.js');
+    const { saveJob, validateJob, describeJob, DEFAULT_POLL_MS } = await import('./jobs.js');
+
+    const triggers: WatchTrigger[] = [];
+    let intervalMs: number | undefined;
+    if (opts.onFile) triggers.push({ kind: 'file', glob: String(opts.onFile) });
+    if (opts.onClipboard) triggers.push({ kind: 'clipboard', pattern: String(opts.onClipboard) });
+    if (opts.onCommand) triggers.push({ kind: 'command', command: String(opts.onCommand) });
+    if (opts.every !== undefined) {
+      const ms = parseInterval(String(opts.every));
+      if (ms === null) {
+        output.error(`Invalid --every "${opts.every}". Use 30s, 5m, 2h, or a bare number of ms.`);
+        process.exit(1);
+      }
+      intervalMs = ms;
+      triggers.push({ kind: 'interval' });
+    }
+    if (opts.at !== undefined) {
+      if (parseAt(String(opts.at)) === null) {
+        output.error(`Invalid --at "${opts.at}". Use HH:MM, 24-hour, e.g. --at 07:30.`);
+        process.exit(1);
+      }
+      triggers.push({ kind: 'schedule', at: String(opts.at) });
+    }
+    if (triggers.length !== 1) {
+      output.error('Pick exactly one trigger: --on-file / --on-clipboard / --on-command / --every / --at.');
+      process.exit(1);
+    }
+    const actions: WatchAction[] = [];
+    if (opts.do) actions.push({ kind: 'task', task: String(opts.do) });
+    if (opts.play) actions.push({ kind: 'macro', name: String(opts.play) });
+    if (actions.length !== 1) {
+      output.error('Pick exactly one action: --do "<task>" or --play <macro>.');
+      process.exit(1);
+    }
+    if (intervalMs === undefined && triggers[0]!.kind !== 'schedule') {
+      intervalMs = parseInterval(String(opts.interval)) ?? DEFAULT_POLL_MS;
+    }
+
+    const job: Job = {
+      name: String(name),
+      trigger: triggers[0]!,
+      action: actions[0]!,
+      ...(intervalMs !== undefined ? { intervalMs } : {}),
+      heal: !!opts.heal,
+      commit: !!opts.commit,
+      warden: !!opts.warden,
+      enabled: true,
+      createdAt: Date.now(),
+    };
+    const errors = validateJob(job);
+    if (errors.length) {
+      errors.forEach((e) => output.error(e));
+      process.exit(1);
+    }
+    if (job.action.kind === 'macro') {
+      const { loadMacro } = await import('./macros.js');
+      try {
+        await loadMacro(job.action.name);
+      } catch (err) {
+        output.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    }
+    if (job.heal) {
+      const { loadConfig } = await import('./util/config.js');
+      const { hasSdkCredentials } = await import('./run.js');
+      if (!hasSdkCredentials((await loadConfig()).apiKey)) {
+        output.error('--heal runs repairs in SDK mode, and no API key is configured.');
+        output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --heal.');
+        process.exit(1);
+      }
+    }
+    try {
+      const path = await saveJob(job, { force: !!opts.force });
+      output.success(`job "${name}" saved → ${path}`);
+      output.info(`${describeJob(job)}`);
+      output.info('the daemon picks it up within seconds if running — check: hands daemon status');
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+jobCmd
+  .command('list')
+  .description('List jobs with their trigger, action, and fire stats')
+  .action(async () => {
+    const { listJobs, readJobStates, describeJob } = await import('./jobs.js');
+    const jobs = await listJobs();
+    if (jobs.length === 0) {
+      output.info('no jobs defined. Add one: hands job add <name> --every 5m --play <macro>');
+      return;
+    }
+    const states = await readJobStates();
+    for (const job of jobs) {
+      const s = states[job.name];
+      const stats = s?.fires
+        ? `${s.fires} fire${s.fires === 1 ? '' : 's'}, last ${s.lastOk ? 'ok' : 'FAILED'}`
+        : 'never fired';
+      output.info(`${job.enabled ? '●' : '○'} ${job.name} — ${describeJob(job)}  (${stats})`);
+    }
+  });
+
+jobCmd
+  .command('show <name>')
+  .description('Full definition + runtime state of one job')
+  .action(async (name) => {
+    const { loadJob, readJobStates } = await import('./jobs.js');
+    try {
+      const job = await loadJob(String(name));
+      console.log(JSON.stringify(job, null, 2));
+      const s = (await readJobStates())[job.name];
+      if (s) console.log(JSON.stringify(s, null, 2));
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+jobCmd
+  .command('rm <name>')
+  .description('Delete a job (the daemon drops it within seconds)')
+  .action(async (name) => {
+    const { deleteJob } = await import('./jobs.js');
+    try {
+      await deleteJob(String(name));
+      output.success(`job "${name}" removed.`);
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+for (const [verb, enabled] of [['enable', true], ['disable', false]] as const) {
+  jobCmd
+    .command(`${verb} <name>`)
+    .description(`${verb === 'enable' ? 'Enable' : 'Disable'} a job without deleting it`)
+    .action(async (name) => {
+      const { setJobEnabled } = await import('./jobs.js');
+      try {
+        await setJobEnabled(String(name), enabled);
+        output.success(`job "${name}" ${verb}d.`);
+      } catch (err) {
+        output.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    });
+}
+
+jobCmd
+  .command('logs [name]')
+  .description('Daemon event log, optionally filtered to one job')
+  .option('--last <n>', 'Show the last N events (default 20).', '20')
+  .option('--json', 'Emit raw JSONL events.')
+  .action(async (name, opts) => {
+    const { readDaemonLog } = await import('./jobs.js');
+    const last = parseInt(String(opts.last), 10);
+    const events = await readDaemonLog({
+      ...(name ? { job: String(name) } : {}),
+      last: Number.isInteger(last) && last > 0 ? last : 20,
+    });
+    if (events.length === 0) {
+      output.info('no daemon events yet.');
+      return;
+    }
+    for (const e of events) {
+      if (opts.json) console.log(JSON.stringify(e));
+      else console.log(`${e.ts ? new Date(e.ts).toISOString() : ''} ${(e.job ?? '-').padEnd(16)} ${e.event.padEnd(5)} ${e.detail ?? ''}`);
+    }
+  });
+
+const daemonCmd = program
+  .command('daemon')
+  .description('The background process that runs your jobs — start/stop/status, or install it to start at logon');
+
+daemonCmd
+  .command('run')
+  .description('Run the daemon in the foreground (what start/install invoke; Ctrl+C to stop)')
+  .action(async () => {
+    const { runDaemon } = await import('./daemon-run.js');
+    try {
+      await runDaemon();
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+daemonCmd
+  .command('start')
+  .description('Start the daemon in the background')
+  .action(async () => {
+    const { startDaemon } = await import('./daemon-ctl.js');
+    await startDaemon();
+  });
+
+daemonCmd
+  .command('stop')
+  .description('Stop the background daemon')
+  .action(async () => {
+    const { stopDaemon } = await import('./daemon-ctl.js');
+    await stopDaemon();
+  });
+
+daemonCmd
+  .command('status')
+  .description('Daemon liveness, per-job stats, and recent events')
+  .action(async () => {
+    const { daemonStatus } = await import('./daemon-ctl.js');
+    await daemonStatus();
+  });
+
+daemonCmd
+  .command('install')
+  .description('Start the daemon at logon: Windows = hidden scheduled task; macOS/Linux = writes the launchd/systemd unit + prints the activation command')
+  .option('--print', 'Show what would be written/run without doing it.')
+  .action(async (opts) => {
+    const { installDaemon } = await import('./daemon-ctl.js');
+    try {
+      await installDaemon({ print: !!opts.print });
+    } catch (err) {
+      output.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+daemonCmd
+  .command('uninstall')
+  .description('Remove the logon persistence installed by `hands daemon install`')
+  .action(async () => {
+    const { uninstallDaemon } = await import('./daemon-ctl.js');
+    await uninstallDaemon();
   });
 
 program

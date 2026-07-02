@@ -63,7 +63,8 @@ function readClipboard(): string {
   }
 }
 
-function realProbes(): WatchProbes {
+/** The real trigger probes (fs, clipboard, child processes) — shared with the daemon. */
+export function realProbes(): WatchProbes {
   const isWindows = process.platform === 'win32';
   const shell = isWindows ? 'cmd.exe' : 'bash';
   const flag = isWindows ? '/c' : '-c';
