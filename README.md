@@ -248,6 +248,7 @@ hands is a high-trust tool: **the agent has shell, keyboard, mouse, and screensh
 - **Review `--dry-run` for anything you don't trust by reflex.** SDK-mode `--dry-run` runs the full agent loop with every tool call audit-logged but stubbed — no shell fires, no keys press, no mouse moves. Read `~/.hands/audit.jsonl` after; reopen for real if it looks right.
 - **Step through an untrusted task with `--guard`.** `hands run --guard` pauses before every state-changing action for allow / deny / always / edit / quit — the middle ground between dry-run and full-send, and the most direct mitigation against a prompt-injected task taking an action you didn't intend. SDK mode (forces it like dry-run).
 - **Or let a policy engine triage with `--warden`.** `hands run --warden` classifies every action through [warden](https://github.com/askalf/warden) — black blocked, red held for you, green/yellow allowed — so you only get interrupted for genuine risk (SSRF, secret-exfil, persistence, destructive commands), with a hash-chained audit. Needs `@askalf/warden`.
+- **Add an LLM judge for what rules can't see with `--warden --judge`** (v0.17.0). Deterministic rules read `X=rm; $X -rf ~/x` as a green read-only shell call — the obfuscation is exactly what they can't see through. `--judge` sends such gray-zone calls (obfuscation, `eval` of dynamic content, indirection) to warden's LLM judge, which mentally deobfuscates and can only **raise** the tier — never lower one, never bless a black. It rides the run's own endpoint (dario when detected → $0), and if the judge is slow or down, the deterministic verdict stands (fail-safe). Tune with `HANDS_JUDGE_MODEL` / `HANDS_JUDGE_TIMEOUT_MS`.
 - **Keep destructive operations targeted.** `hands run "delete files in ~/Downloads"` is a safer prompt than `hands run "clean up my computer"`. The narrower the scope of the prompt, the narrower the agent's reach for failure modes.
 - **Use `--dry-run` when you want a plan before any execution.** Both modes audit-log every tool call now; what dry-run adds is stubbed execution — the full agent loop with nothing firing on the host. It forces SDK mode (needs an API key or dario).
 - **Don't run hands as root / Administrator.** The agent's shell access is exactly your shell access. Running as root makes `rm -rf /` a one-prompt foot-gun the guardrails won't necessarily catch.
@@ -334,6 +335,7 @@ hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
 hands run "<prompt>" --warden         # gate each action through warden's policy firewall (SDK mode)
+hands run "<prompt>" --warden --judge # + LLM judge deobfuscates gray-zone calls, escalate-only (SDK mode)
 hands run "<prompt>" -m claude-opus-4-6     # override model (this run only)
 hands run "<prompt>" -b 10.00         # SDK budget cap (USD); default $5.00
 hands run "<prompt>" -t 100           # max turns per task; default 50

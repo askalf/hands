@@ -11,6 +11,19 @@ checklist.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-01
+
+The LLM tier for what rules can't see. Deterministic patterns read an assign-then-invoke indirection as a green read-only shell call — the obfuscation is exactly what they can't see through. `hands run --warden --judge` sends warden's gray-zone verdicts to its LLM judge, which deobfuscates and may only RAISE the tier. Minor-version bump for the new flag.
+
+PR in this release: #105 (warden judge).
+
+### Added — `hands run --warden --judge`: escalate-only LLM judge on gray-zone calls
+
+- **`--judge`** (requires `--warden`) routes calls warden marks gray — obfuscation smells, `eval` of dynamic content, indirection — through warden's `checkAsync` + `makeJudge`. The judge mentally deobfuscates and can only **escalate** (green→…→black): never lower a tier, never bless a black. Verified live: the judge returned red for an assign-then-invoke recursive delete that deterministic classify allows as green.
+- **Fail-safe by construction** (warden's semantics, not hands'): a slow or absent judge keeps the deterministic verdict with a "judge unavailable" note — degraded, never broken. Non-gray verdicts never touch the judge, so `--warden` behavior without the flag is byte-identical.
+- **Rides the run's endpoint**: dario when detected ($0 on a Max subscription), the run's API key, warden's default judge model; `HANDS_JUDGE_MODEL` / `HANDS_JUDGE_TIMEOUT_MS` override. Judge escalations are tallied in the end-of-run warden summary. Threads through single-step recipes.
+- Bridge: `loadWardenApi` now also loads `checkAsync` / `makeJudge` / `mapMcpToAction` (checkout and npm subpaths); `WardenGate` accepts an async classifier; pure `resolveJudgeOptions`. 6 new test cases (348 total) including a real-warden integration leg with a stub judge.
+
 ## [0.16.0] - 2026-07-01
 
 Parameterize without touching JSON. Macros have taken `{{params}}` since v0.11 — but creating one meant hand-editing the file. `hands macro parameterize deploy env=staging` now does it in one command, completing the crystallize story: record once, generalize the recording, re-aim the replay forever — all zero-LLM. Minor-version bump for the new subcommand.

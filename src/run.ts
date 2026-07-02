@@ -20,6 +20,8 @@ export interface RunOptions {
   guard?: boolean;
   /** When set, every tool call is classified by warden's policy firewall before dispatch (`hands run --warden`). SDK-mode gate like --guard. Mutually exclusive with --dry-run / --json / --continue / --guard. */
   warden?: boolean;
+  /** With --warden: send gray-zone (obfuscated / indirect) calls to warden's LLM judge, which can only escalate the tier (`hands run --warden --judge`). Rides the run's endpoint — $0 through dario. */
+  judge?: boolean;
   /** Crystallize: record this run's effectful tool calls into a deterministic macro of this name (`hands run --record <name>`). SDK mode only (capture is at the dispatch site). */
   record?: string;
   /** Self-verify: the agent must prove success with a real check before claiming done (`hands run --verify`). Works in both modes. */
@@ -113,6 +115,11 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
   }
   if (options.warden && options.json) {
     output.error('--warden and --json are mutually exclusive: warden may prompt for red-tier actions, which is interactive.');
+    process.exit(1);
+  }
+  // --judge is a refinement of --warden, not a mode of its own.
+  if (options.judge && !options.warden) {
+    output.error('--judge only works with --warden: the judge is consulted on warden\'s gray-zone verdicts.');
     process.exit(1);
   }
   if (options.warden && options.continueSession) {
@@ -340,6 +347,7 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
           wardenGate = await createWardenGate({
             ...(interactive && guardHandle ? { guard: guardHandle.guard } : {}),
             out: (line: string) => output.info(line),
+            ...(options.judge ? { judge: { apiKey: config.apiKey } } : {}),
           });
         } catch (err) {
           guardHandle?.close();
@@ -347,7 +355,7 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
           process.exit(1);
         }
         output.info(
-          `warden firewall active — ${interactive ? 'red-tier actions prompt for approval' : 'unattended: red-tier fails closed'}. Policy: ${wardenPaths().policy}`,
+          `warden firewall active — ${interactive ? 'red-tier actions prompt for approval' : 'unattended: red-tier fails closed'}${options.judge ? '; LLM judge on gray-zone calls (escalate-only)' : ''}. Policy: ${wardenPaths().policy}`,
         );
       }
       let recorder: MacroRecorder | undefined;

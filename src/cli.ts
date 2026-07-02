@@ -66,6 +66,7 @@ program
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .option('--guard', 'Pause for [a]llow / [d]eny / [A]lways / [e]dit / [q]uit before every state-changing action. Forces SDK mode (like --dry-run).')
   .option('--warden', 'Route each action through warden\'s policy firewall (blocks black, holds red for approval). Forces SDK mode. Needs @askalf/warden installed (or HANDS_WARDEN_PATH).')
+  .option('--judge', 'With --warden: send gray-zone (obfuscated / indirect) actions to warden\'s LLM judge, which deobfuscates and can only RAISE the tier. Rides the run\'s endpoint — $0 through dario.')
   .option('--record <name>', 'Crystallize this run into a deterministic macro of <name> — replay it later free (no LLM) with `hands play <name>`. Forces SDK mode.')
   .option('--verify', 'Make the agent prove success with a real check before claiming done (states a criterion, then verifies it). Works in both modes.')
   .option('--ui', 'Give the agent semantic UI tools (ui_tree / click_element) to target controls by name via the accessibility tree instead of pixels. Forces SDK mode; Windows-only for now.')
@@ -107,6 +108,7 @@ program
         dryRun: opts.dryRun,
         guard: opts.guard,
         warden: opts.warden,
+        judge: opts.judge,
         verify: opts.verify,
         ui: opts.ui,
         noDario: opts.dario === false,
@@ -161,6 +163,7 @@ program
       dryRun: opts.dryRun,
       guard: opts.guard,
       warden: opts.warden,
+      judge: opts.judge,
       verify: opts.verify,
       ui: opts.ui,
       noDario: opts.dario === false,
