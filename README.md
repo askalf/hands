@@ -659,7 +659,7 @@ Env wins over config: `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` (for SDK + dario
 
 - **Bugs / feature requests** — open an [issue](https://github.com/askalf/hands/issues). Include `hands doctor --json` output and the failing prompt.
 - **Security issues** — email **security@askalf.org**, not a public issue. See [SECURITY.md](SECURITY.md).
-- **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / agent / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
+- **PRs welcome.** See [CONTRIBUTING.md](CONTRIBUTING.md) for build / test flow. Code style matches dario / deepdive: small TypeScript, pure decision functions where possible, `strict: true`, no `any`, no unused imports.
 
 Run `npm install && npm run build && npm test` to get a working dev tree (314 tests across 31 test files).
 
