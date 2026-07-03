@@ -328,6 +328,7 @@ hands run @<recipe>         # run a saved recipe (see Recipes below)
 hands run @<recipe> --set k=v   # fill the recipe's {{k}} placeholders
 hands run --record <name> "<task>"   # crystallize the run into a deterministic macro
 hands play <name>           # replay a recorded macro — zero LLM, free (see Crystallize)
+hands suggest               # repeated tasks worth crystallizing — the 3rd similar run promotes itself (see hands learns)
 hands play <name> --heal --commit    # self-healing replay: a failing step is repaired by the model and the fix crystallizes back
 hands run "<prompt>" --verify        # agent proves success with a real check before claiming done
 hands watch --on-file <glob> --do "<task>"   # fire a task when a file/clipboard/command/timer event hits
@@ -419,6 +420,27 @@ hands macro list / show nightly / rm nightly
 - Capture happens at the SDK dispatch site (like `--guard`/`--warden`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
 - **`macro parameterize`** (v0.16.0) turns a literal value into a reusable `{{param}}` in one command: `hands macro parameterize deploy env=staging` rewrites every `staging` (never inside an existing `{{…}}`) into `{{env=staging}}`. The original value becomes the **default**, so a bare `hands play` replays byte-identically — `--set env=prod` re-aims it. A value that appears nowhere errors and saves nothing (typo protection), and `macro show` lists a macro's params.
 - **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
+
+### hands learns — auto-crystallize
+
+`--record` requires you to know, up front, that a task is worth keeping. Most people don't — they just run the same handful of tasks over and over, paying the model every time. hands notices (v0.20.0). Every run lands in a local history; the **third similar run** promotes the steps hands just executed into a macro, automatically:
+
+```
+$ hands run --once "pull main and run the tests"
+  … (3rd time you've run something like this)
+✨ learned: 3 similar runs — crystallized 4 steps → macro "auto-pull-main-run"
+   replay free (no LLM): hands play auto-pull-main-run
+
+$ hands suggest        # what else is worth crystallizing?
+  4× "open spotify and play discover weekly"  (~$0.48 spent on the LLM so far)
+     crystallize it: hands run --record auto-open-spotify-play "open spotify and play discover weekly"
+```
+
+**The more you use hands, the less it costs.** Repeat runs of a learned task get a reminder that the $0 path exists; `hands suggest` ranks every repeat cluster by run count and LLM spend.
+
+- **Similarity is deterministic** (token overlap, no model call — the learning loop never spends LLM to save LLM), fuzzy enough that paraphrases cluster. Runs count within a 30-day window; the shadow capture rides the same SDK dispatch site as `--record`, so promotion happens in SDK mode (Claude Login runs still feed history, reminders, and `hands suggest`).
+- **Auto-macros clear a higher bar than hand-recorded ones** — you never reviewed them. Promotion needs a successful, single-task run with a small trajectory hands can replay deterministically (on Windows, a bash step carrying embedded newlines executes unreliably under cmd — seen live — so such trajectories are never auto-promoted; they stay in `hands suggest` for an explicit `--record`). Deleting an auto-macro makes learning start over for that task.
+- Names are `auto-<task-slug>`; they're ordinary macros — `parameterize`, `--export`, `play --heal`, jobs, everything applies. Everything is local (`~/.hands/history.jsonl`, `0600`). Off switch: `HANDS_NO_LEARN=1` or `"learn": false` in `~/.hands/config.json` (history and `hands suggest` keep working).
 
 ### Self-healing replay — automation that converges instead of rotting
 

@@ -47,6 +47,16 @@ export interface RunOptions {
 /** Exit code contract for `hands run --once`: 0 = task completed, 1 = setup/config error, 2 = task did not complete cleanly. */
 export const EXIT_TASK_FAILED = 2;
 
+/** Surface the learning loop's outcome — the one product moment of auto-crystallize. */
+function announceLearn(outcome: import('./learn.js').LearnOutcome): void {
+  if (outcome.kind === 'promoted' && outcome.macroName) {
+    output.success(`✨ learned: ${outcome.cluster} similar runs — crystallized ${outcome.steps} step${outcome.steps === 1 ? '' : 's'} → macro "${outcome.macroName}"`);
+    output.info(`replay free (no LLM): hands play ${outcome.macroName} · re-aim: hands macro parameterize ${outcome.macroName} key=value · off: HANDS_NO_LEARN=1`);
+  } else if (outcome.kind === 'reminder' && outcome.macroName) {
+    output.info(`💡 you have a $0 macro for this task: hands play ${outcome.macroName}`);
+  }
+}
+
 export interface RunJsonInput {
   text: string;
   inputTokens: number;
@@ -319,6 +329,15 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
         if (result.ok === false) {
           process.exitCode = EXIT_TASK_FAILED;
         }
+        // Claude Login mode can't shadow-capture steps (tools run in the
+        // claude child), so learning here is history + reminders only —
+        // `hands suggest` points at the --record path.
+        if (prompt) {
+          const { recordRunAndMaybeLearn } = await import('./learn.js');
+          announceLearn(await recordRunAndMaybeLearn({
+            prompt, mode: 'cli', ok: result.ok !== false, turns: result.turns, costUsd: result.costUsd,
+          }));
+        }
       }
     } else {
       if (!prompt) {
@@ -376,6 +395,13 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
         }
         recorder = new MacroRecorder();
         output.info(`recording → macro "${recordName}" — effectful steps will crystallize into a deterministic, $0 replay.`);
+      } else if (!options.dryRun) {
+        // Shadow capture for auto-crystallize: SDK runs are single-task, so
+        // the effectful trajectory is exactly what --record would save —
+        // kept in memory, promoted to a macro only when the learning loop
+        // sees this task for the third time.
+        const { MacroRecorder } = await import('./macros.js');
+        recorder = new MacroRecorder();
       }
       try {
         const result = await runSdkMode(prompt, config, {
@@ -411,6 +437,13 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
             result.costUsd,
             result.turns,
           );
+        }
+        if (!options.dryRun && !recordName) {
+          const { recordRunAndMaybeLearn } = await import('./learn.js');
+          announceLearn(await recordRunAndMaybeLearn({
+            prompt, mode: 'sdk', ok: true, turns: result.turns, costUsd: result.costUsd,
+            ...(recorder ? { steps: recorder.steps } : {}),
+          }));
         }
       } finally {
         guardHandle?.close();

@@ -15,6 +15,8 @@ export interface AgentConfig {
   maxBudgetUsd: number;
   maxTurns: number;
   voice?: VoiceOptions;
+  /** Auto-crystallize: promote 3×-repeated tasks into macros automatically. Default true; HANDS_NO_LEARN=1 also disables. */
+  learn?: boolean;
 }
 
 const CONFIG_DIR = join(homedir(), '.hands');
