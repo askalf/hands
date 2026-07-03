@@ -11,6 +11,21 @@ checklist.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-02
+
+hands stops being a CLI you invoke and becomes the machine's automation layer. `hands watch` was one automation in one terminal; `hands daemon` is the durable version — one background process owning a fleet of **jobs**: every trigger, every $0 macro replay, every self-healing repair, unattended, across reboots. Record once → replay free → drift heals itself → the fleet keeps running. Minor-version bump for the new command groups.
+
+PR in this release: #110 (daemon + jobs; supersedes #109, auto-closed when its stacked base merged).
+
+### Added — `hands daemon` + `hands job`: persistent, unattended automations
+
+- **Jobs** are files (`~/.hands/jobs/<name>.json`, hand-editable, validated on save AND on daemon load): one trigger — `--on-file` / `--on-clipboard` / `--on-command` / `--every`, or the new **`--at HH:MM` daily schedule** — plus one action (`--do` task or `--play` macro, with `--heal` / `--commit` / `--warden` for self-healing replays). `hands job add/list/show/rm/enable/disable/logs`.
+- **The daemon** (`hands daemon run/start/stop/status`) polls every enabled job and fires its action. Jobs **hot-reload** (add/rm/enable apply within seconds, engine baselines survive unrelated changes); state is **event-durable** (written after every fire — a hard kill loses nothing); a single-instance **pidfile lock** with stale-lock reclaim prevents double daemons; everything lands in a rotated JSONL event log (`hands job logs`).
+- **Actions run as child processes** — a config error, wedge, or crash in one automation is contained and logged, never fatal to the fleet; actions time out (default 15 min, `HANDS_JOB_TIMEOUT_MS`). **Global concurrency is 1 by design**: computer-use shares one mouse/keyboard/screen, so fires queue (a job re-firing while queued/running is skipped and logged) — interleaved clicks are corruption, not parallelism.
+- **Schedule semantics are cron-like**: `--at` fires once per local day at/after the mark; a mark that passed while the daemon was down is skipped, never back-fired on startup.
+- **`hands daemon install`** registers logon persistence: Windows = hidden launcher (wscript + node, both signed — Smart App Control stays happy) behind a `schtasks` ONLOGON task; macOS/Linux = writes the launchd plist / systemd user unit and prints the activation command. `--print` previews without touching the system; `uninstall` removes it. Installing persistence is deliberately a human-run command.
+- Pure core (job validation, child-argv building, context substitution, `parseAt`, the schedule trigger with an injected clock) unit-tested; pidfile lock tested against real live/dead child pids. 19 new tests (388 total). Live-verified end-to-end on Windows: interval job firing on cadence, a file job hot-added mid-run and firing with `{{file}}` context, `daemon start/stop/status` round-trip, `install --print`.
+
 ## [0.18.0] - 2026-07-02
 
 Deterministic automation that repairs itself. A macro replays at $0 until the world drifts — a file gets renamed, a control moves, a flag changes — and then a human had to bring the model back by hand. `hands play --heal` brings it back automatically: a failing step summons the model for a **bounded repair of just that step**, the replay continues, and `--commit` crystallizes the fix into the macro — so the next play is back to $0. Automation that converges instead of rotting. Minor-version bump for the new flags.

@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseInterval, newItems, matchRegex, describeTrigger, WatchEngine } from '../dist/watch.js';
+import { parseInterval, parseAt, newItems, matchRegex, describeTrigger, WatchEngine } from '../dist/watch.js';
 
 // ── pure helpers ────────────────────────────────────────────────────
 
@@ -37,6 +37,18 @@ test('describeTrigger — human one-liners', () => {
   assert.match(describeTrigger({ kind: 'clipboard', pattern: 'TODO' }), /clipboard/);
   assert.match(describeTrigger({ kind: 'command', command: 'x' }), /exits 0/);
   assert.match(describeTrigger({ kind: 'interval' }), /interval/);
+  assert.match(describeTrigger({ kind: 'schedule', at: '07:30' }), /daily at 07:30/);
+});
+
+test('parseAt — HH:MM to minutes; junk → null', () => {
+  assert.equal(parseAt('00:00'), 0);
+  assert.equal(parseAt('07:30'), 450);
+  assert.equal(parseAt('23:59'), 1439);
+  assert.equal(parseAt('9:05'), 545);
+  assert.equal(parseAt('24:00'), null);
+  assert.equal(parseAt('12:60'), null);
+  assert.equal(parseAt('noon'), null);
+  assert.equal(parseAt(''), null);
 });
 
 // ── engine ──────────────────────────────────────────────────────────
@@ -83,4 +95,26 @@ test('engine command — fires only on the rising edge', async () => {
   code = 1; await e.check();
   code = 0;
   assert.ok(await e.check(), 'succeeds again after failing → fire again');
+});
+
+test('engine schedule — fires once per day at/after the mark; a missed mark is skipped, not back-fired', async () => {
+  let now = new Date(2026, 6, 2, 8, 0); // 08:00, before the 09:00 mark
+  const e = new WatchEngine({ kind: 'schedule', at: '09:00' }, probes({ now: () => now }));
+  assert.equal(await e.check(), null, 'before the mark → no fire');
+  now = new Date(2026, 6, 2, 9, 0);
+  assert.ok(await e.check(), 'at the mark → fire');
+  now = new Date(2026, 6, 2, 14, 30);
+  assert.equal(await e.check(), null, 'later the same day → no re-fire');
+  now = new Date(2026, 6, 3, 9, 1);
+  assert.ok(await e.check(), 'next day past the mark → fires again');
+});
+
+test('engine schedule — daemon started AFTER the mark treats today as missed (cron semantics)', async () => {
+  let now = new Date(2026, 6, 2, 14, 0); // first look is already past 09:00
+  const e = new WatchEngine({ kind: 'schedule', at: '09:00' }, probes({ now: () => now }));
+  assert.equal(await e.check(), null, 'first look past the mark → baseline, no fire');
+  now = new Date(2026, 6, 2, 18, 0);
+  assert.equal(await e.check(), null, 'still today → no fire');
+  now = new Date(2026, 6, 3, 9, 0);
+  assert.ok(await e.check(), 'tomorrow at the mark → fires');
 });

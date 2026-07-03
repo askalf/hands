@@ -331,6 +331,8 @@ hands play <name>           # replay a recorded macro — zero LLM, free (see Cr
 hands play <name> --heal --commit    # self-healing replay: a failing step is repaired by the model and the fix crystallizes back
 hands run "<prompt>" --verify        # agent proves success with a real check before claiming done
 hands watch --on-file <glob> --do "<task>"   # fire a task when a file/clipboard/command/timer event hits
+hands job add <name> --at 07:30 --play <macro>   # durable automation: the daemon runs it unattended (see The daemon)
+hands daemon start / status / install        # the background process that runs your jobs; install = start at logon
 hands run "<prompt>" --ui            # target controls by name via the accessibility tree (Windows, SDK mode)
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
@@ -469,6 +471,31 @@ hands watch --on-command "gh run list -L1 --json conclusion -q '.[0].conclusion=
 - **Actions** (one): `--do "<task>"` runs the model (trigger context substituted: `{{file}}`/`{{clip}}`/`{{match}}`), or `--play <macro>` replays a macro with **zero LLM** — a free, deterministic reaction to an event.
 - **`--play` + `--heal [--commit]`** (v0.18.0) makes the daemon self-maintaining: when drift breaks a macro step mid-watch, the model repairs it and (with `--commit`) the fix crystallizes back — the next fire replays at $0 again. See *Self-healing replay* above.
 - `--interval <ms>` poll rate, `--once`, `--max <n>`. A probe error or a failing action is logged; the watcher keeps going.
+- A watcher lives and dies with your terminal. To make an automation *durable*, save it as a **job** and let the **daemon** run it — same triggers, same actions, no terminal. Next section.
+
+### The daemon — hands as your machine's automation layer
+
+`hands watch` is one automation in one terminal. `hands daemon` (v0.19.0) is the durable version: one background process that owns a **fleet** of jobs — every trigger, every $0 macro replay, every self-healing repair, unattended, across reboots:
+
+```bash
+# Define jobs — same triggers/actions as watch, plus a daily schedule
+hands job add ingest  --on-file '~/in/*.csv' --play ingest-csv --heal --commit
+hands job add standup --at 07:30 --do "open my calendar and read today's meetings into a note"
+hands job add deploy  --on-command "gh run list -L1 --json conclusion -q '.[0].conclusion==\"success\"'" --play ship
+
+# Run them
+hands daemon start            # background daemon; jobs hot-reload — add/rm/enable without a restart
+hands daemon status           # liveness, per-job fire stats, recent events
+hands job list / logs ingest  # what fired, what it printed, what failed
+hands daemon install          # start at logon: hidden scheduled task (Windows), launchd/systemd unit (macOS/Linux)
+```
+
+- **Jobs are files** — `~/.hands/jobs/<name>.json`, hand-editable, one per automation. The daemon rescans every few seconds, so `hands job add/rm/enable/disable` apply live. Runtime state (fires, last outcome) and the event log (`hands job logs`, JSONL, rotated) live alongside.
+- **Every action runs as a child process.** A wedged or crashing automation is logged and contained — it never takes down the fleet. Actions time out (default 15 min, `HANDS_JOB_TIMEOUT_MS`).
+- **Global concurrency is 1, by design.** Computer-use shares one mouse, one keyboard, one screen — two agents interleaving clicks is corruption, not parallelism. Fires queue; a job that re-fires while already queued or running is skipped and logged.
+- **Daily schedules** (`--at HH:MM`) follow cron semantics for downtime: a mark that passed while the daemon was off is *skipped*, never back-fired on startup.
+- **The full stack applies unattended**: macro jobs replay at $0; `--heal --commit` jobs repair drift and converge back to $0; warden-gated healing fails closed with nobody at the keyboard. This is the compounding loop: *record once → replay free → drift heals itself → the fleet keeps running*.
+- `hands daemon install` registers logon persistence — on Windows a hidden, signed-binaries-only launcher (wscript + node) behind a scheduled task; on macOS/Linux it writes the launchd plist / systemd user unit and prints the one activation command. `--print` previews everything; `hands daemon uninstall` removes it. Installing persistence is deliberately a human action — run it yourself, once.
 
 ### Self-verifying tasks
 
