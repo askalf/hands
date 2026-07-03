@@ -15,7 +15,7 @@ checklist.
 
 hands learns. `--record` requires knowing up front that a task is worth keeping; most people just run the same handful of tasks over and over, paying the model each time. Now every run lands in a local history, and the THIRD similar run promotes the steps hands just executed into a macro — automatically: `✨ learned: 3 similar runs — crystallized 4 steps → macro "auto-pull-main-run"`. Repeat runs get pointed at the $0 path; `hands suggest` ranks everything else worth crystallizing. **The more you use hands, the less it costs.** Minor-version bump for the new behavior + command.
 
-PR in this release: #TBD (auto-crystallize).
+PR in this release: #111 (auto-crystallize).
 
 ### Added — auto-crystallize: repeated tasks promote themselves into $0 macros
 
