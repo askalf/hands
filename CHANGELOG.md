@@ -15,7 +15,7 @@ checklist.
 
 hands stops being a CLI you invoke and becomes the machine's automation layer. `hands watch` was one automation in one terminal; `hands daemon` is the durable version — one background process owning a fleet of **jobs**: every trigger, every $0 macro replay, every self-healing repair, unattended, across reboots. Record once → replay free → drift heals itself → the fleet keeps running. Minor-version bump for the new command groups.
 
-PR in this release: #109 (daemon + jobs).
+PR in this release: #110 (daemon + jobs; supersedes #109, auto-closed when its stacked base merged).
 
 ### Added — `hands daemon` + `hands job`: persistent, unattended automations
 
