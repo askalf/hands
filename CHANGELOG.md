@@ -11,6 +11,22 @@ checklist.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-03
+
+hands learns. `--record` requires knowing up front that a task is worth keeping; most people just run the same handful of tasks over and over, paying the model each time. Now every run lands in a local history, and the THIRD similar run promotes the steps hands just executed into a macro — automatically: `✨ learned: 3 similar runs — crystallized 4 steps → macro "auto-pull-main-run"`. Repeat runs get pointed at the $0 path; `hands suggest` ranks everything else worth crystallizing. **The more you use hands, the less it costs.** Minor-version bump for the new behavior + command.
+
+PR in this release: #111 (auto-crystallize).
+
+### Added — auto-crystallize: repeated tasks promote themselves into $0 macros
+
+- **Shadow capture**: every SDK run now carries a MacroRecorder (the same dispatch-site mechanism as `--record`, in memory only). When the learning loop sees a task for the third time in 30 days and the run succeeded, the trajectory saves as macro `auto-<task-slug>` and hands announces the free path. Claude Login runs can't capture (tools run in the claude child) — they still feed history, reminders, and suggestions.
+- **Deterministic similarity** — token-overlap (Jaccard) over stopword-stripped prompts, threshold 0.65: paraphrases cluster, and the learning loop never spends LLM calls to save LLM calls. Cross-mode clusters count (2 Claude Login runs + 1 SDK run = promotion).
+- **Reminders**: a repeat run of an already-learned task prints `💡 you have a $0 macro for this task: hands play <name>` instead of minting duplicates. Deleting the macro makes learning start over.
+- **`hands suggest`** (`--json` for scripts): repeat clusters ranked by run count and LLM spend — covered ones point at their macro, uncovered ones come with a ready-to-paste `--record` command.
+- **Auto-macros clear a higher bar than hand-recorded ones**: promotion requires a successful single-task run, a 1–50-step trajectory, and **replay safety** — on Windows, a bash command carrying embedded newlines executes unreliably under cmd's line splitting (observed live: a multiline `powershell -Command` worked in the run, then failed on replay), so such trajectories are never auto-promoted and stay in `hands suggest` for an explicit `--record`.
+- Off switch: `HANDS_NO_LEARN=1` or `"learn": false` in `~/.hands/config.json` — history and `hands suggest` keep working, the automation goes quiet. History lives at `~/.hands/history.jsonl` (0600, rotated at 5MB); bookkeeping failures never fail a run.
+- Pure core (tokenizing, similarity, clustering, naming, replay-safety, the promotion decision) unit-tested; the full hook tested against a temp HOME writing real macros. 15 new tests (403 total). Live-verified end-to-end on Windows through dario: run 1 → history, run 2 → `hands suggest` lists the cluster with real spend, run 3 → `✨ learned` + macro on disk, `hands play` ×2 deterministic at $0, run 4 → reminder.
+
 ## [0.19.0] - 2026-07-02
 
 hands stops being a CLI you invoke and becomes the machine's automation layer. `hands watch` was one automation in one terminal; `hands daemon` is the durable version — one background process owning a fleet of **jobs**: every trigger, every $0 macro replay, every self-healing repair, unattended, across reboots. Record once → replay free → drift heals itself → the fleet keeps running. Minor-version bump for the new command groups.

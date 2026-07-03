@@ -1027,6 +1027,32 @@ daemonCmd
     await uninstallDaemon();
   });
 
+// ── suggest (auto-crystallize) ──────────────────────────────────────
+program
+  .command('suggest')
+  .description('Repeated tasks worth crystallizing into $0 macros. hands learns these automatically — a 3rd similar SDK run promotes itself; this lists the rest.')
+  .option('--json', 'Emit suggestions as a JSON array.')
+  .action(async (opts) => {
+    const { readRunHistory, buildSuggestions, LEARN_THRESHOLD } = await import('./learn.js');
+    const { listMacroNames } = await import('./macros.js');
+    const suggestions = buildSuggestions(await readRunHistory(), new Set(await listMacroNames()), Date.now());
+    if (opts.json) {
+      console.log(JSON.stringify(suggestions));
+      return;
+    }
+    if (suggestions.length === 0) {
+      output.info(`no repeated tasks yet. Keep running things — hands notices repetition, and the ${LEARN_THRESHOLD}rd similar run crystallizes itself into a $0 macro (SDK mode; dario keeps the runs $0 too).`);
+      return;
+    }
+    for (const s of suggestions) {
+      const cost = s.totalCostUsd > 0 ? `  (~$${s.totalCostUsd.toFixed(2)} spent on the LLM so far)` : '';
+      const preview = s.prompt.length > 70 ? s.prompt.slice(0, 70) + '…' : s.prompt;
+      output.info(`${s.count}× "${preview}"${cost}`);
+      if (s.macro) output.info(`   already crystallized — replay free: hands play ${s.macro}`);
+      else output.info(`   crystallize it: hands run --record ${s.suggestedName} "${s.prompt}"`);
+    }
+  });
+
 program
   .command('voice-setup')
   .description('Download whisper.cpp binary and speech model for voice control')
