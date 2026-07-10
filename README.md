@@ -747,9 +747,9 @@ Part of **[Own Your Stack](https://github.com/askalf)** — open tools for ownin
 - **[cordon](https://github.com/askalf/cordon)** — own your prompts
 - **[picket](https://github.com/askalf/picket)** — own your agent browser
 - **[amnesia](https://github.com/askalf/amnesia)** — own your search
-- **[askalf platform](https://askalf.org)** — own your operation
+- **[askalf](https://askalf.org)** — own your operation: the AI operation that runs Sprayberry Labs
 
-hands is part of the [askalf](https://askalf.org) ecosystem — a self-hosted AI workforce platform, now in early access.
+hands is one of the tools behind [askalf](https://askalf.org) — the AI operation that runs Sprayberry Labs; its public register is at askalf.org.
 
 ---
 
