@@ -247,8 +247,8 @@ hands is a high-trust tool: **the agent has shell, keyboard, mouse, and screensh
 
 - **Review `--dry-run` for anything you don't trust by reflex.** SDK-mode `--dry-run` runs the full agent loop with every tool call audit-logged but stubbed — no shell fires, no keys press, no mouse moves. Read `~/.hands/audit.jsonl` after; reopen for real if it looks right.
 - **Step through an untrusted task with `--guard`.** `hands run --guard` pauses before every state-changing action for allow / deny / always / edit / quit — the middle ground between dry-run and full-send, and the most direct mitigation against a prompt-injected task taking an action you didn't intend. SDK mode (forces it like dry-run).
-- **Or let a policy engine triage with `--warden`.** `hands run --warden` classifies every action through [warden](https://github.com/askalf/warden) — black blocked, red held for you, green/yellow allowed — so you only get interrupted for genuine risk (SSRF, secret-exfil, persistence, destructive commands), with a hash-chained audit. Needs `@askalf/warden`.
-- **Add an LLM judge for what rules can't see with `--warden --judge`** (v0.17.0). Deterministic rules read `X=rm; $X -rf ~/x` as a green read-only shell call — the obfuscation is exactly what they can't see through. `--judge` sends such gray-zone calls (obfuscation, `eval` of dynamic content, indirection) to warden's LLM judge, which mentally deobfuscates and can only **raise** the tier — never lower one, never bless a black. It rides the run's own endpoint (dario when detected → $0), and if the judge is slow or down, the deterministic verdict stands (fail-safe). Tune with `HANDS_JUDGE_MODEL` / `HANDS_JUDGE_TIMEOUT_MS`.
+- **Or let a policy engine triage with `--redstamp`.** `hands run --redstamp` classifies every action through [redstamp](https://github.com/askalf/redstamp) — black blocked, red held for you, green/yellow allowed — so you only get interrupted for genuine risk (SSRF, secret-exfil, persistence, destructive commands), with a hash-chained audit. Needs `@askalf/redstamp`.
+- **Add an LLM judge for what rules can't see with `--redstamp --judge`** (v0.17.0). Deterministic rules read `X=rm; $X -rf ~/x` as a green read-only shell call — the obfuscation is exactly what they can't see through. `--judge` sends such gray-zone calls (obfuscation, `eval` of dynamic content, indirection) to redstamp's LLM judge, which mentally deobfuscates and can only **raise** the tier — never lower one, never bless a black. It rides the run's own endpoint (dario when detected → $0), and if the judge is slow or down, the deterministic verdict stands (fail-safe). Tune with `HANDS_JUDGE_MODEL` / `HANDS_JUDGE_TIMEOUT_MS`.
 - **Keep destructive operations targeted.** `hands run "delete files in ~/Downloads"` is a safer prompt than `hands run "clean up my computer"`. The narrower the scope of the prompt, the narrower the agent's reach for failure modes.
 - **Use `--dry-run` when you want a plan before any execution.** Both modes audit-log every tool call now; what dry-run adds is stubbed execution — the full agent loop with nothing firing on the host. It forces SDK mode (needs an API key or dario).
 - **Don't run hands as root / Administrator.** The agent's shell access is exactly your shell access. Running as root makes `rm -rf /` a one-prompt foot-gun the guardrails won't necessarily catch.
@@ -338,8 +338,8 @@ hands run "<prompt>" --ui            # target controls by name via the accessibi
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
-hands run "<prompt>" --warden         # gate each action through warden's policy firewall (SDK mode)
-hands run "<prompt>" --warden --judge # + LLM judge deobfuscates gray-zone calls, escalate-only (SDK mode)
+hands run "<prompt>" --redstamp         # gate each action through redstamp's policy firewall (SDK mode)
+hands run "<prompt>" --redstamp --judge # + LLM judge deobfuscates gray-zone calls, escalate-only (SDK mode)
 hands run "<prompt>" -m claude-opus-4-8     # override model (this run only)
 hands run "<prompt>" -b 10.00         # SDK budget cap (USD); default $5.00
 hands run "<prompt>" -t 100           # max turns per task; default 50
@@ -417,7 +417,7 @@ hands macro list / show nightly / rm nightly
 ```
 
 - **Only effectful steps are recorded** — bash, file edits, clicks, keystrokes. Screenshots, `read_page`, `find_files`, `ui_tree`, cursor moves and `view` are skipped. Bash and file edits are the deterministic backbone (bash replays behind the same guardrail blocklist); coordinate clicks replay best-effort, scaled to the current screen; semantic clicks from `--ui` runs (v0.15.0) replay by **name** — re-resolved in the live accessibility tree, wherever the control sits now.
-- Capture happens at the SDK dispatch site (like `--guard`/`--warden`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
+- Capture happens at the SDK dispatch site (like `--guard`/`--redstamp`), so `--record` runs in **SDK mode** (route through dario for $0). The macro name is validated and collision-checked *before* the run — you never spend a task only to fail the save.
 - **`macro parameterize`** (v0.16.0) turns a literal value into a reusable `{{param}}` in one command: `hands macro parameterize deploy env=staging` rewrites every `staging` (never inside an existing `{{…}}`) into `{{env=staging}}`. The original value becomes the **default**, so a bare `hands play` replays byte-identically — `--set env=prod` re-aims it. A value that appears nowhere errors and saves nothing (typo protection), and `macro show` lists a macro's params.
 - **`--export`** compiles the macro into a runnable script: bash → commands, file-create → a heredoc / `Set-Content`, GUI steps → commented `# [manual]` placeholders. For a shell-first task that's a complete, clean script. Macros are `0600` in `~/.hands/macros/`; names can't traverse out of the dir.
 
@@ -449,13 +449,13 @@ A macro replays at $0 until the world drifts — a file gets renamed, a button m
 ```bash
 hands play nightly --heal             # a failing step is repaired in place, the replay continues
 hands play nightly --heal --commit    # …and the fix crystallizes back into the macro
-hands play nightly --heal --warden    # …with the healer gated by warden's policy firewall
+hands play nightly --heal --redstamp    # …with the healer gated by redstamp's policy firewall
 ```
 
 - The healer gets the macro's original intent, the replay position (done / **FAILED** / still-to-run), and the failing step's full input + error. Its orders: start from the failing step's own input, achieve *that step's* intent, prefer the smallest fix, and **prove it** — the repair runs with the `verify` tool, a clamped turn budget (≤20), the full guardrail blocklist, and the audit log. REPAIRED is machine-checked from the run's verdict; anything else counts as a failed step.
 - **`--commit`** splices the healer's effectful steps over the failed one — in the ORIGINAL macro, so `{{params}}` elsewhere survive (a repaired step that itself carries a `{{param}}` is never rewritten; hands tells you instead of silently baking values in). The next `hands play` replays the fix at $0: **drift → heal once → back to free**.
 - **Repairs are distilled before they commit**: one tool-less model call reviews the repair trajectory and drops the steps that were just looking around (listings, existence checks) — only the effects needed to reproduce the fix are kept. Fails open (an unusable answer keeps everything), and even a wrong drop self-corrects: that step fails on the next play and heals again.
-- **Unattended-safe**: `--warden` classifies every healer action; unattended, red-tier fails closed. Missing SDK credentials fail *before* the first step runs. Route through dario and the repair itself costs $0 on the Claude Max subscription.
+- **Unattended-safe**: `--redstamp` classifies every healer action; unattended, red-tier fails closed. Missing SDK credentials fail *before* the first step runs. Route through dario and the repair itself costs $0 on the Claude Max subscription.
 - Composes with watchers: `hands watch --on-file '~/in/*.csv' --play ingest --heal --commit` is a local automation daemon that **maintains its own macros** — no other computer-use tool self-repairs its deterministic automation.
 
 ### Semantic UI targeting
@@ -471,7 +471,7 @@ $ hands run --ui "open the File menu and click Save"
 
 - **`ui_tree`** lists the active window's named controls (name, role, position) — a semantic view, no screenshot. **`click_element(name, role?)`** clicks a control by its visible name; no coordinates, so it survives layout changes. No unambiguous match → it returns the candidates.
 - The system prompt tells the agent to **prefer** these over pixel clicking when a control has a name, and screenshot only for what the tree doesn't expose.
-- **First-class across hands' safety and macro surfaces** (v0.15.0): a semantic click pauses at the `--guard` prompt like any other state-changing action (with `[e]dit` to retarget by name, and denial *before* the tree is even read), flows through the `--warden` policy gate, records into `--record` macros, and replays via `hands play` — by name, zero-LLM.
+- **First-class across hands' safety and macro surfaces** (v0.15.0): a semantic click pauses at the `--guard` prompt like any other state-changing action (with `[e]dit` to retarget by name, and denial *before* the tree is even read), flows through the `--redstamp` policy gate, records into `--record` macros, and replays via `hands play` — by name, zero-LLM.
 - Windows uses UIAutomation via a signed PowerShell host (no `.ps1`, no unsigned native code). macOS (AX) / Linux (AT-SPI) aren't wired yet and say so. SDK-mode tools, so `--ui` forces SDK mode. Very high-DPI displays may need verification.
 
 ### Watchers — reactive computer use
@@ -516,7 +516,7 @@ hands daemon install          # start at logon: hidden scheduled task (Windows),
 - **Every action runs as a child process.** A wedged or crashing automation is logged and contained — it never takes down the fleet. Actions time out (default 15 min, `HANDS_JOB_TIMEOUT_MS`).
 - **Global concurrency is 1, by design.** Computer-use shares one mouse, one keyboard, one screen — two agents interleaving clicks is corruption, not parallelism. Fires queue; a job that re-fires while already queued or running is skipped and logged.
 - **Daily schedules** (`--at HH:MM`) follow cron semantics for downtime: a mark that passed while the daemon was off is *skipped*, never back-fired on startup.
-- **The full stack applies unattended**: macro jobs replay at $0; `--heal --commit` jobs repair drift and converge back to $0; warden-gated healing fails closed with nobody at the keyboard. This is the compounding loop: *record once → replay free → drift heals itself → the fleet keeps running*.
+- **The full stack applies unattended**: macro jobs replay at $0; `--heal --commit` jobs repair drift and converge back to $0; redstamp-gated healing fails closed with nobody at the keyboard. This is the compounding loop: *record once → replay free → drift heals itself → the fleet keeps running*.
 - `hands daemon install` registers logon persistence — on Windows a hidden, signed-binaries-only launcher (wscript + node) behind a scheduled task; on macOS/Linux it writes the launchd plist / systemd user unit and prints the one activation command. `--print` previews everything; `hands daemon uninstall` removes it. Installing persistence is deliberately a human action — run it yourself, once.
 
 ### Self-verifying tasks
@@ -554,26 +554,26 @@ $ hands run --guard "clean up my downloads folder"
 - **Read-only calls never prompt** — screenshot, zoom, mouse-move, `read_page`, `find_files`, and the editor's `view` pass straight through. Only actions that can change host state stop for approval.
 - Like `--dry-run`, the gate sits at the SDK dispatch site, so `--guard` runs in **SDK mode** (in Claude Login mode it forces SDK for the invocation — route through dario to keep it $0). It's mutually exclusive with `--dry-run`, `--json`, and `--continue`. Approved calls still pass the full guardrail blocklist and land in the audit log (denials too); the run ends with a `guard: N allowed, M denied` tally.
 
-### warden — policy firewall
+### redstamp — policy firewall
 
-`--guard` asks *you* about every action. `hands run --warden` (v0.10.0) asks a *policy engine* — [warden](https://github.com/askalf/warden), the Own Your Stack agent-security firewall — and only escalates to you when warden flags risk. The same guard that fronts Claude Code, the platform forge, and MCP servers fronts hands' computer-use loop, writing to the same tamper-evident audit.
+`--guard` asks *you* about every action. `hands run --redstamp` (v0.10.0) asks a *policy engine* — [redstamp](https://github.com/askalf/redstamp), the Own Your Stack agent-security firewall — and only escalates to you when redstamp flags risk. The same guard that fronts Claude Code, the platform forge, and MCP servers fronts hands' computer-use loop, writing to the same tamper-evident audit.
 
 ```
-$ hands run --warden "update the repo and post the release notes"
+$ hands run --redstamp "update the repo and post the release notes"
 
-  warden: bash → green ✔ allow
+  redstamp: bash → green ✔ allow
   ✔ pulled main (3 commits)
-  warden: read_page → black ✗ BLOCK — ☠ cloud-metadata / link-local SSRF (credential theft)
-  ⚠ [warden] warden BLOCKED this black action … Do not retry it.
-  warden: bash → red ? approve — ⚠ http request to an internal/RFC1918 address (SSRF risk)
-    ▶ bash: curl http://10.0.0.5/deploy   ⟵ warden red: ⚠ internal SSRF
+  redstamp: read_page → black ✗ BLOCK — ☠ cloud-metadata / link-local SSRF (credential theft)
+  ⚠ [redstamp] redstamp BLOCKED this black action … Do not retry it.
+  redstamp: bash → red ? approve — ⚠ http request to an internal/RFC1918 address (SSRF risk)
+    ▶ bash: curl http://10.0.0.5/deploy   ⟵ redstamp red: ⚠ internal SSRF
     [a]llow  [d]eny  [A]lways  [e]dit  [q]uit ? d
 ```
 
-- Each tool call is classified `green` / `yellow` / `red` / `black`: **black is blocked** (the model is told, and adapts or stops), **red is held** for your approval (reusing the `--guard` prompt when a TTY is attached; fail-closed when unattended), **green/yellow pass**. warden routes hands' tools to the right risk model — `bash`→shell, `read_page`→fetch (SSRF / cloud-metadata / exfil), the editor→write (persistence / write-root) — so a prompt-injected page steering `read_page` at `169.254.169.254` is blocked, not silently fetched.
-- The gate is loop-level, so it covers `read_page` / `find_files` too. Every verdict is appended to warden's **hash-chained, tamper-evident** audit at `~/.warden/audit.jsonl`; the run ends with a `warden: N allowed · N approved · N denied · N blocked` tally.
+- Each tool call is classified `green` / `yellow` / `red` / `black`: **black is blocked** (the model is told, and adapts or stops), **red is held** for your approval (reusing the `--guard` prompt when a TTY is attached; fail-closed when unattended), **green/yellow pass**. redstamp routes hands' tools to the right risk model — `bash`→shell, `read_page`→fetch (SSRF / cloud-metadata / exfil), the editor→write (persistence / write-root) — so a prompt-injected page steering `read_page` at `169.254.169.254` is blocked, not silently fetched.
+- The gate is loop-level, so it covers `read_page` / `find_files` too. Every verdict is appended to redstamp's **hash-chained, tamper-evident** audit at `~/.redstamp/audit.jsonl`; the run ends with a `redstamp: N allowed · N approved · N denied · N blocked` tally.
 - Like `--guard`, it runs in **SDK mode** and is mutually exclusive with `--dry-run` / `--json` / `--continue` / `--guard`.
-- **warden is optional** — it isn't a hands dependency. Install it (`npm i -g @askalf/warden`) or, until it's on npm, point hands at a checkout with `HANDS_WARDEN_PATH=/path/to/warden`. Without it, `--warden` errors helpfully and the rest of hands is unaffected.
+- **redstamp is optional** — it isn't a hands dependency. Install it (`npm i -g @askalf/redstamp`) or, until it's on npm, point hands at a checkout with `HANDS_WARDEN_PATH=/path/to/redstamp`. Without it, `--redstamp` errors helpfully and the rest of hands is unaffected.
 
 ### Audit
 
@@ -642,7 +642,7 @@ src/
     page-cleanup.ts # HTML cleanup pipeline for read_page
     cli-overrides.ts# per-run -m / -b / -t validation
     guard.ts        # --guard decision engine (classify / preview / parse + GuardController)
-    warden.ts       # --warden bridge — dynamic loader + WardenGate over @askalf/warden
+    redstamp.ts       # --redstamp bridge — dynamic loader + WardenGate over @askalf/redstamp
     output.ts       # chalked stdout helpers
 ```
 
@@ -741,11 +741,11 @@ Part of **[Own Your Stack](https://github.com/askalf)** — open tools for ownin
 - **[deepdive](https://github.com/askalf/deepdive)** — own your research
 - **[hands](https://github.com/askalf/hands)** — own your computer-use _(you are here)_
 - **[browser-bridge](https://github.com/askalf/browser-bridge)** — own your browser
-- **[warden](https://github.com/askalf/warden)** — own your agent security
-- **[canon](https://github.com/askalf/canon)** — own your agent skills
-- **[keeper](https://github.com/askalf/keeper)** — own your agent secrets
+- **[redstamp](https://github.com/askalf/redstamp)** — own your agent security
+- **[truecopy](https://github.com/askalf/truecopy)** — own your agent skills
+- **[strongroom](https://github.com/askalf/strongroom)** — own your agent secrets
 - **[cordon](https://github.com/askalf/cordon)** — own your prompts
-- **[picket](https://github.com/askalf/picket)** — own your agent browser
+- **[fieldpass](https://github.com/askalf/fieldpass)** — own your agent browser
 - **[amnesia](https://github.com/askalf/amnesia)** — own your search
 - **[askalf](https://askalf.org)** — own your operation: the AI operation that runs Sprayberry Labs
 
