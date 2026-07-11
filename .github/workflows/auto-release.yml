@@ -29,6 +29,8 @@ permissions:
   # the npm publish (and its id-token: write OIDC needs) live entirely
   # in publish.yml now.
   actions: write
+  id-token: write # keyless Sigstore signing (attest-build-provenance)
+  attestations: write # persist the attestation in GitHub's store
 
 jobs:
   release:
@@ -134,6 +136,34 @@ jobs:
           } > body.md
 
           gh release create "$TAG" --title "$TAG" --notes-file body.md
+
+      - name: Build npm tarball (release artifact)
+        if: steps.ver.outputs.changed == 'true'
+        id: pack
+        run: |
+          set -euo pipefail
+          tarball=$(npm pack --silent)
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+          sha256sum "$tarball"
+
+      - name: Attest build provenance (keyless Sigstore)
+        if: steps.ver.outputs.changed == 'true'
+        id: attest
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ steps.pack.outputs.tarball }}
+
+      - name: Upload tarball + provenance bundle to the release
+        if: steps.ver.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.ver.outputs.version }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE" "${TARBALL}.sigstore.json"
+          gh release upload "$TAG" --clobber "$TARBALL" "${TARBALL}.sigstore.json"
 
       # The npm publish itself happens in publish.yml (the workflow the
       # npmjs trusted publisher is bound to) — dispatched explicitly
