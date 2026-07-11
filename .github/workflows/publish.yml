@@ -27,6 +27,10 @@ name: Publish to npm
 # Every path checks out the tag itself and re-runs the full gate
 # (typecheck / build / test / smoke) before publishing, and a guard
 # refuses to publish if the tag doesn't match package.json's version.
+#
+# Idempotent: if npm already has package.json's version, the run exits
+# green without rebuilding or publishing — so re-dispatching a tag that
+# is already live is a clean no-op instead of a duplicate-version error.
 
 on:
   release:
@@ -73,12 +77,32 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      - name: Skip if npm already has this version
+        id: gate
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          published=$(npm view "${name}@${version}" version 2>/dev/null || echo "")
+          if [ "$published" = "$version" ]; then
+            echo "npm already has ${name}@${version}; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - run: npm ci
+        if: steps.gate.outputs.skip != 'true'
       - run: npm run typecheck
+        if: steps.gate.outputs.skip != 'true'
       - run: npm run build
+        if: steps.gate.outputs.skip != 'true'
       - run: npm test
+        if: steps.gate.outputs.skip != 'true'
       - run: node dist/cli.js --help
+        if: steps.gate.outputs.skip != 'true'
 
       # No NODE_AUTH_TOKEN and no secrets — auth comes from the OIDC
       # exchange with the trusted publisher registered on npmjs.com.
       - run: npm publish --access public --provenance
+        if: steps.gate.outputs.skip != 'true'
