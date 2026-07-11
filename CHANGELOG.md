@@ -11,6 +11,10 @@ checklist.
 
 ## [Unreleased]
 
+### Fixed — `hands doctor` now probes the ydotoold daemon on Wayland, not just the ydotool binary
+
+- On Wayland, `ydotool` is a thin client to the `ydotoold` daemon: the binary can be on `PATH` while the daemon isn't listening, in which case every mouse/keyboard call hangs until the 15s exec timeout. `doctor` previously checked only the binary and reported input **ok** — the README already promised it "reports whether the daemon is reachable", but it didn't. It now emits a `ydotoold` check that probes the daemon socket (`$YDOTOOL_SOCKET` → `$XDG_RUNTIME_DIR/.ydotool_socket` → `/tmp/.ydotool_socket`), reporting `warn` with a start hint when the daemon is down. The probe is an existence check only — it synthesizes no input — and is Wayland-only, so X11 / macOS / Windows reports are unchanged. A missing daemon is `warn`, not `fail`, so it doesn't flip the exit code.
+
 ## [0.20.0] - 2026-07-03
 
 hands learns. `--record` requires knowing up front that a task is worth keeping; most people just run the same handful of tasks over and over, paying the model each time. Now every run lands in a local history, and the THIRD similar run promotes the steps hands just executed into a macro — automatically: `✨ learned: 3 similar runs — crystallized 4 steps → macro "auto-pull-main-run"`. Repeat runs get pointed at the $0 path; `hands suggest` ranks everything else worth crystallizing. **The more you use hands, the less it costs.** Minor-version bump for the new behavior + command.
