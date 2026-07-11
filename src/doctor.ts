@@ -17,7 +17,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkPlatform } from './platform/index.js';
 import { resolveClaudeInvocation } from './platform/claude-cli.js';
-import { isWhisperInstalled } from './voice/index.js';
+import { isWhisperInstalled, expectedRecorder, type RecorderBackend } from './voice/index.js';
 import { loadConfig, getConfigDir } from './util/config.js';
 import { commandExists } from './platform/index.js';
 import { execFile } from 'node:child_process';
@@ -224,6 +224,21 @@ async function platformChecks(): Promise<CheckResult[]> {
       detail: p.keyboard.tool + (p.keyboard.available ? '' : ' — not installed'),
     },
   ];
+  // Wayland: ydotool is a thin client to the ydotoold daemon. The binary can be
+  // installed while the daemon is down, in which case mouse/keyboard report ok
+  // but every input call hangs to timeout. warn (not fail) — the tool is there,
+  // it just needs starting — so this never flips the exit code on its own.
+  if (p.displayServer === 'wayland' && p.daemon) {
+    out.push({
+      id: 'platform.daemon',
+      category: 'platform',
+      status: p.daemon.running ? 'ok' : 'warn',
+      label: p.daemon.name,
+      detail: p.daemon.running
+        ? `reachable at ${scrubPath(p.daemon.socket)}`
+        : `not running — start it: systemctl --user start ydotoold (or run ydotoold with uinput permissions); input calls will hang until it is up`,
+    });
+  }
   if (p.missingDeps.length > 0 && p.installHint) {
     out.push({
       id: 'platform.install-hint',
@@ -270,7 +285,7 @@ async function claudeCliChecks(): Promise<CheckResult[]> {
 
 async function voiceChecks(): Promise<CheckResult[]> {
   const ok = await isWhisperInstalled();
-  return [
+  const out: CheckResult[] = [
     {
       id: 'voice.whisper',
       category: 'voice',
@@ -279,6 +294,55 @@ async function voiceChecks(): Promise<CheckResult[]> {
       detail: ok ? 'installed' : 'not installed — run `hands voice-setup` to enable --voice mode',
     },
   ];
+
+  // The mic recorder is a SEPARATE install from whisper: whisper transcribes a
+  // WAV, but nothing produces one without a recording backend, and a user who
+  // has whisper but no SoX/arecord hits a runtime ENOENT — exactly what doctor
+  // exists to pre-empt. Report the platform's backend (matching getMicCommand()
+  // so doctor and --voice never disagree). warn (never fail) on missing —
+  // voice is opt-in, so it must not flip the exit code for someone who never
+  // uses --voice. Gated by skipWhisper along with the whisper check above.
+  const rec = expectedRecorder();
+  const found: string[] = [];
+  for (const cmd of rec.probe) {
+    if (await commandExists(cmd)) found.push(cmd);
+  }
+  out.push(renderRecorderCheck(rec, found));
+  return out;
+}
+
+/**
+ * Render the `voice.recorder` check from a backend and which of its probe
+ * tools were found. Pure — the probing (commandExists) happens in the caller,
+ * so the installed/missing rendering is unit-testable without a real recorder.
+ */
+export function renderRecorderCheck(rec: RecorderBackend, found: string[]): CheckResult {
+  if (found.length > 0) {
+    return {
+      id: 'voice.recorder',
+      category: 'voice',
+      status: 'ok',
+      label: 'recorder',
+      detail: `${found[0]}${rec.hasFallback ? ' (preferred; native waveIn otherwise)' : ''}`,
+    };
+  }
+  if (rec.hasFallback) {
+    // Windows: native PowerShell waveIn always works, so never warn/fail.
+    return {
+      id: 'voice.recorder',
+      category: 'voice',
+      status: 'info',
+      label: 'recorder',
+      detail: 'native PowerShell waveIn (built in — ffmpeg/sox used first if installed)',
+    };
+  }
+  return {
+    id: 'voice.recorder',
+    category: 'voice',
+    status: 'warn',
+    label: 'recorder',
+    detail: `${rec.label} not installed — run \`${rec.installHint}\` for --voice`,
+  };
 }
 
 async function darioChecks(opts: DoctorOptions): Promise<CheckResult[]> {
