@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { promises as fs } from 'node:fs';
+import { join } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
@@ -29,12 +31,51 @@ export async function commandExists(cmd: string): Promise<boolean> {
   }
 }
 
+/**
+ * Resolve the ydotoold Unix-socket path the same way the ydotool client does:
+ * an explicit `YDOTOOL_SOCKET` wins, otherwise `$XDG_RUNTIME_DIR/.ydotool_socket`,
+ * and if `XDG_RUNTIME_DIR` is unset fall back to ydotool's compiled-in
+ * `/tmp/.ydotool_socket`. Pure — resolution only, no filesystem touch.
+ */
+export function resolveYdotoolSocket(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env['YDOTOOL_SOCKET'];
+  if (explicit && explicit.trim()) return explicit;
+  const runtimeDir = env['XDG_RUNTIME_DIR'];
+  if (runtimeDir && runtimeDir.trim()) return join(runtimeDir, '.ydotool_socket');
+  return '/tmp/.ydotool_socket';
+}
+
+/**
+ * Is the ydotoold daemon reachable? `ydotool` is a thin client: the socket
+ * file existing means ydotoold is listening on it. This is an existence check
+ * ONLY — it synthesizes no input (no mouse move, no keypress). `access` is
+ * injectable so the probe is unit-testable without a live daemon.
+ */
+export async function isYdotooldRunning(
+  socketPath: string,
+  access: (p: string) => Promise<void> = (p) => fs.access(p),
+): Promise<boolean> {
+  try {
+    await access(socketPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface PlatformCheck {
   platform: Platform;
   displayServer: DisplayServer;
   screenshot: { available: boolean; tool: string };
   mouse: { available: boolean; tool: string };
   keyboard: { available: boolean; tool: string };
+  /**
+   * Input-synthesis daemon reachability. Wayland only: `ydotool` needs the
+   * `ydotoold` daemon running or every input call hangs until timeout.
+   * `undefined` off Wayland, or when the `ydotool` binary itself is missing
+   * (the mouse/keyboard `fail` already covers that — no double-report).
+   */
+  daemon?: { name: string; socket: string; running: boolean };
   claudeCli: boolean;
   missingDeps: string[];
   installHint: string;
@@ -51,6 +92,7 @@ export async function checkPlatform(): Promise<PlatformCheck> {
   let mouseAvail = false;
   let keyboardTool = '';
   let keyboardAvail = false;
+  let daemon: PlatformCheck['daemon'];
 
   if (platform === 'darwin') {
     screenshotTool = 'screencapture';
@@ -69,7 +111,15 @@ export async function checkPlatform(): Promise<PlatformCheck> {
       mouseAvail = await commandExists('ydotool');
       keyboardTool = 'ydotool';
       keyboardAvail = mouseAvail;
-      if (!mouseAvail) missing.push('ydotool');
+      if (!mouseAvail) {
+        missing.push('ydotool');
+      } else {
+        // The binary can be on PATH while ydotoold isn't listening — in which
+        // case every input call hangs to timeout. Probe the daemon socket
+        // (existence only) so doctor can warn before that happens.
+        const socket = resolveYdotoolSocket();
+        daemon = { name: 'ydotoold', socket, running: await isYdotooldRunning(socket) };
+      }
     } else {
       screenshotTool = 'scrot';
       screenshotAvail = await commandExists('scrot');
@@ -106,6 +156,7 @@ export async function checkPlatform(): Promise<PlatformCheck> {
     screenshot: { available: screenshotAvail, tool: screenshotTool },
     mouse: { available: mouseAvail, tool: mouseTool },
     keyboard: { available: keyboardAvail, tool: keyboardTool },
+    ...(daemon ? { daemon } : {}),
     claudeCli,
     missingDeps: missing,
     installHint,

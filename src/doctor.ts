@@ -224,6 +224,21 @@ async function platformChecks(): Promise<CheckResult[]> {
       detail: p.keyboard.tool + (p.keyboard.available ? '' : ' — not installed'),
     },
   ];
+  // Wayland: ydotool is a thin client to the ydotoold daemon. The binary can be
+  // installed while the daemon is down, in which case mouse/keyboard report ok
+  // but every input call hangs to timeout. warn (not fail) — the tool is there,
+  // it just needs starting — so this never flips the exit code on its own.
+  if (p.displayServer === 'wayland' && p.daemon) {
+    out.push({
+      id: 'platform.daemon',
+      category: 'platform',
+      status: p.daemon.running ? 'ok' : 'warn',
+      label: p.daemon.name,
+      detail: p.daemon.running
+        ? `reachable at ${scrubPath(p.daemon.socket)}`
+        : `not running — start it: systemctl --user start ydotoold (or run ydotoold with uinput permissions); input calls will hang until it is up`,
+    });
+  }
   if (p.missingDeps.length > 0 && p.installHint) {
     out.push({
       id: 'platform.install-hint',

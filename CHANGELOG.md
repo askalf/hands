@@ -11,6 +11,10 @@ checklist.
 
 ## [Unreleased]
 
+### Fixed — `hands doctor` now probes the ydotoold daemon on Wayland, not just the ydotool binary
+
+- On Wayland, `ydotool` is a thin client to the `ydotoold` daemon: the binary can be on `PATH` while the daemon isn't listening, in which case every mouse/keyboard call hangs until the 15s exec timeout. `doctor` previously checked only the binary and reported input **ok** — the README already promised it "reports whether the daemon is reachable", but it didn't. It now emits a `ydotoold` check that probes the daemon socket (`$YDOTOOL_SOCKET` → `$XDG_RUNTIME_DIR/.ydotool_socket` → `/tmp/.ydotool_socket`), reporting `warn` with a start hint when the daemon is down. The probe is an existence check only — it synthesizes no input — and is Wayland-only, so X11 / macOS / Windows reports are unchanged. A missing daemon is `warn`, not `fail`, so it doesn't flip the exit code.
+
 ### Fixed — `hands doctor` now reports the voice recording backend, not just whisper
 
 - Voice needs two separate installs: whisper (transcribes a WAV) and a **recording backend** (captures the mic). `doctor` checked only whisper, so a user who ran `hands voice-setup`, got whisper, then ran `--voice` on macOS without SoX hit a runtime `ENOENT` — the exact failure doctor exists to pre-empt. The README promised "doctor reports it"; now it does. A `voice.recorder` check reports the platform's backend, matching `getMicCommand()`'s selection so doctor and the runtime never disagree: macOS `rec` (SoX), Linux `arecord` (ALSA), Windows `ffmpeg`/`sox` with the native PowerShell waveIn fallback. Missing on macOS/Linux is `warn` with the install hint (`brew install sox` / `sudo apt install alsa-utils`); Windows never fails (native fallback). `warn` doesn't flip the exit code — voice is opt-in — and `--skip-whisper` skips the recorder probe too.
