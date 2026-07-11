@@ -15,7 +15,9 @@ import {
   renderDoctorText,
   renderDoctorJson,
   exitCodeFor,
+  renderRecorderCheck,
 } from '../dist/doctor.js';
+import { expectedRecorder } from '../dist/voice/index.js';
 
 test('nodeMeetsMinimum — 20.0.0 is the floor', () => {
   assert.equal(nodeMeetsMinimum('v20.0.0'),  true);
@@ -109,4 +111,58 @@ test('exitCodeFor — 1 on any fail, 0 otherwise', () => {
   assert.equal(exitCodeFor({ summary: { total: 0, ok: 0, warn: 0, fail: 0, info: 0 } }), 0);
   assert.equal(exitCodeFor({ summary: { total: 5, ok: 4, warn: 1, fail: 0, info: 0 } }), 0);
   assert.equal(exitCodeFor({ summary: { total: 5, ok: 3, warn: 1, fail: 1, info: 0 } }), 1);
+});
+
+// ── voice recorder backend ──────────────────────────────────────────
+
+test('expectedRecorder — backend matches getMicCommand() per platform', () => {
+  const win = expectedRecorder('win32');
+  assert.deepEqual(win.probe, ['ffmpeg', 'sox'], 'Windows prefers ffmpeg then sox');
+  assert.equal(win.hasFallback, true, 'Windows has native waveIn — never fails');
+
+  const mac = expectedRecorder('darwin');
+  assert.deepEqual(mac.probe, ['rec']);
+  assert.equal(mac.installHint, 'brew install sox');
+  assert.equal(mac.hasFallback, false);
+
+  const linux = expectedRecorder('linux');
+  assert.deepEqual(linux.probe, ['arecord']);
+  assert.equal(linux.installHint, 'sudo apt install alsa-utils');
+  assert.equal(linux.hasFallback, false);
+});
+
+test('renderRecorderCheck — installed backend is ok', () => {
+  const c = renderRecorderCheck(expectedRecorder('darwin'), ['rec']);
+  assert.equal(c.status, 'ok');
+  assert.equal(c.id, 'voice.recorder');
+  assert.match(c.detail, /rec/);
+});
+
+test('renderRecorderCheck — missing on macOS/Linux is warn with install hint', () => {
+  const mac = renderRecorderCheck(expectedRecorder('darwin'), []);
+  assert.equal(mac.status, 'warn');
+  assert.match(mac.detail, /brew install sox/);
+
+  const linux = renderRecorderCheck(expectedRecorder('linux'), []);
+  assert.equal(linux.status, 'warn');
+  assert.match(linux.detail, /alsa-utils/);
+});
+
+test('renderRecorderCheck — Windows never warns/fails (native waveIn fallback)', () => {
+  // No external recorder found, but Windows has the built-in fallback.
+  const none = renderRecorderCheck(expectedRecorder('win32'), []);
+  assert.equal(none.status, 'info');
+  assert.match(none.detail, /waveIn/);
+  // ffmpeg present → ok, noting it's preferred over the fallback.
+  const withFfmpeg = renderRecorderCheck(expectedRecorder('win32'), ['ffmpeg']);
+  assert.equal(withFfmpeg.status, 'ok');
+  assert.match(withFfmpeg.detail, /ffmpeg/);
+});
+
+test('renderRecorderCheck — a missing recorder never flips the exit code', () => {
+  // warn/info only, so exitCodeFor stays 0 (voice is opt-in).
+  for (const os of ['win32', 'darwin', 'linux']) {
+    const c = renderRecorderCheck(expectedRecorder(os), []);
+    assert.notEqual(c.status, 'fail', `${os} recorder check must not be fail`);
+  }
 });
