@@ -42,6 +42,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 2  # need HEAD^1 for the version-diff check
+          persist-credentials: false
 
       - name: Check if version actually changed
         id: ver
