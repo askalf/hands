@@ -11,6 +11,12 @@ checklist.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-07-11
+
+`hands doctor` stops reporting green on dependencies it never actually checked, and `--ui` semantic targeting crosses from Windows to macOS. Two doctor probes now back promises the README already made: the Wayland `ydotoold` input daemon and the voice recording backend were both assumed present — reported healthy when they could be missing, then turning into a hang-to-timeout or a runtime `ENOENT` the moment you used input or `--voice`. And the accessibility-tree targeting that lets the agent click a control **by name** instead of by pixel — Windows-only since v0.14.0 — now walks the macOS AX tree too, with zero changes downstream of enumeration. Minor bump for the new macOS platform surface.
+
+PRs in this release: #119 (ydotoold probe), #120 (voice recorder check), #121 (macOS AX targeting).
+
 ### Fixed — `hands doctor` now probes the ydotoold daemon on Wayland, not just the ydotool binary
 
 - On Wayland, `ydotool` is a thin client to the `ydotoold` daemon: the binary can be on `PATH` while the daemon isn't listening, in which case every mouse/keyboard call hangs until the 15s exec timeout. `doctor` previously checked only the binary and reported input **ok** — the README already promised it "reports whether the daemon is reachable", but it didn't. It now emits a `ydotoold` check that probes the daemon socket (`$YDOTOOL_SOCKET` → `$XDG_RUNTIME_DIR/.ydotool_socket` → `/tmp/.ydotool_socket`), reporting `warn` with a start hint when the daemon is down. The probe is an existence check only — it synthesizes no input — and is Wayland-only, so X11 / macOS / Windows reports are unchanged. A missing daemon is `warn`, not `fail`, so it doesn't flip the exit code.
