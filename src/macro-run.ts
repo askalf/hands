@@ -220,8 +220,8 @@ async function runStep(step: MacroStep, scaleFactor: number): Promise<void> {
 /**
  * Replay a semantic click: re-resolve the control by name (and role) in the
  * live accessibility tree and click its center. The control is found
- * wherever it sits NOW — no stale coordinates. Windows-only for now, like
- * the --ui tools that record these steps.
+ * wherever it sits NOW — no stale coordinates. Runs wherever the --ui tools
+ * that record these steps do (Windows + macOS), via enumerateUiElements().
  */
 async function runClickElementStep(step: MacroStep): Promise<void> {
   const name = step.input['name'];

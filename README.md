@@ -295,7 +295,7 @@ Pre-1.0. Honest about what doesn't work yet:
 | OS | Status | Computer Control | Notes |
 |---|---|---|---|
 | **Windows 10 / 11** | Best-supported | PowerShell (pre-installed) | The OS hands was developed and exercised on |
-| **macOS 12+** | Cross-platform smoke pending | `open` + AppleScript / `osascript` | Accessibility permission required for keystrokes; install `cliclick` (`brew install cliclick`) for `hands` SDK-mode mouse / keyboard |
+| **macOS 12+** | Cross-platform smoke pending | `open` + AppleScript / `osascript` | Accessibility permission required for keystrokes and `--ui` semantic targeting (AX tree); install `cliclick` (`brew install cliclick`) for `hands` SDK-mode mouse / keyboard |
 | **Linux (X11)** | Cross-platform smoke pending | `xdotool` + `scrot` | `apt install xdotool scrot` (Debian/Ubuntu); equivalents on other distros |
 | **Linux (Wayland)** | Cross-platform smoke pending | `ydotool` + `grim` | `ydotoold` daemon required for input; `apt install ydotool grim` |
 
@@ -334,7 +334,7 @@ hands run "<prompt>" --verify        # agent proves success with a real check be
 hands watch --on-file <glob> --do "<task>"   # fire a task when a file/clipboard/command/timer event hits
 hands job add <name> --at 07:30 --play <macro>   # durable automation: the daemon runs it unattended (see The daemon)
 hands daemon start / status / install        # the background process that runs your jobs; install = start at logon
-hands run "<prompt>" --ui            # target controls by name via the accessibility tree (Windows, SDK mode)
+hands run "<prompt>" --ui            # target controls by name via the accessibility tree (Windows / macOS, SDK mode)
 hands run "<prompt>" --voice          # voice input via local whisper
 hands run "<prompt>" --dry-run        # plan + audit-log without executing (SDK mode)
 hands run "<prompt>" --guard          # approve each action before it fires (SDK mode)
@@ -472,7 +472,7 @@ $ hands run --ui "open the File menu and click Save"
 - **`ui_tree`** lists the active window's named controls (name, role, position) — a semantic view, no screenshot. **`click_element(name, role?)`** clicks a control by its visible name; no coordinates, so it survives layout changes. No unambiguous match → it returns the candidates.
 - The system prompt tells the agent to **prefer** these over pixel clicking when a control has a name, and screenshot only for what the tree doesn't expose.
 - **First-class across hands' safety and macro surfaces** (v0.15.0): a semantic click pauses at the `--guard` prompt like any other state-changing action (with `[e]dit` to retarget by name, and denial *before* the tree is even read), flows through the `--redstamp` policy gate, records into `--record` macros, and replays via `hands play` — by name, zero-LLM.
-- Windows uses UIAutomation via a signed PowerShell host (no `.ps1`, no unsigned native code). macOS (AX) / Linux (AT-SPI) aren't wired yet and say so. SDK-mode tools, so `--ui` forces SDK mode. Very high-DPI displays may need verification.
+- Windows uses UIAutomation via a signed PowerShell host (no `.ps1`, no unsigned native code); **macOS** walks the frontmost app's Accessibility (AX) tree via `osascript`/JXA System Events — same JSON shape, no native code, but it needs Accessibility permission granted to the app running hands (it says so if missing). Linux (AT-SPI) isn't wired yet and says so. SDK-mode tools, so `--ui` forces SDK mode. Very high-DPI displays may need verification.
 
 ### Watchers — reactive computer use
 
