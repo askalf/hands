@@ -93,10 +93,15 @@ jobs:
         run: |
           set -eo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
+          # Regex anchors the heading with (?:^|\n) and has NO /m flag, so the
+          # `$` terminator means end-of-string. The old /m version let `$` match
+          # the blank line right after the heading, so the lazy capture returned
+          # empty — every release through v0.21.0 shipped with an empty GitHub
+          # release body (notes still live in CHANGELOG.md). Verified offline.
           node -e "
             const fs = require('fs');
             const md = fs.existsSync('CHANGELOG.md') ? fs.readFileSync('CHANGELOG.md', 'utf-8') : '';
-            const re = new RegExp('^## \\\\[' + '${VERSION}' + '\\\\][^\\\\n]*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## \\\\[|$)', 'm');
+            const re = new RegExp('(?:^|\\\\n)## \\\\[' + '${VERSION}' + '\\\\][^\\\\n]*\\\\n([\\\\s\\\\S]*?)(?=\\\\n## \\\\[|$)');
             const m = re.exec(md);
             process.stdout.write(m ? m[1].trim() : '(no changelog section found for this version)');
           " > release-notes.md
