@@ -230,6 +230,35 @@ public class WaveRec {
   return scriptPath;
 }
 
+export interface RecorderBackend {
+  /** Human label of what --voice records with on this platform. */
+  label: string;
+  /** External command(s) to probe, in getMicCommand()'s preference order. */
+  probe: string[];
+  /** Install command when none is present (empty when there is a built-in fallback). */
+  installHint: string;
+  /** True when a missing external tool still leaves a working recorder (Windows' native waveIn). */
+  hasFallback: boolean;
+}
+
+/**
+ * The recording backend `hands doctor` should report for a platform. Kept in
+ * lock-step with getMicCommand()'s selection below so doctor and the actual
+ * --voice runtime never disagree about what voice needs. Pure — no probing
+ * here; the caller checks availability (e.g. via commandExists).
+ */
+export function expectedRecorder(os: NodeJS.Platform = platform()): RecorderBackend {
+  if (os === 'win32') {
+    // getMicCommand: ffmpeg -> sox -> native PowerShell waveIn (always present).
+    return { label: 'ffmpeg/sox or native waveIn', probe: ['ffmpeg', 'sox'], installHint: '', hasFallback: true };
+  }
+  if (os === 'darwin') {
+    return { label: 'rec (SoX)', probe: ['rec'], installHint: 'brew install sox', hasFallback: false };
+  }
+  // Linux (and any other platform getMicCommand treats as ALSA).
+  return { label: 'arecord (ALSA)', probe: ['arecord'], installHint: 'sudo apt install alsa-utils', hasFallback: false };
+}
+
 /**
  * Get the microphone recording command for the current platform.
  * Returns [command, args] that outputs raw PCM16 mono to stdout.

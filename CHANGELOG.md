@@ -11,6 +11,10 @@ checklist.
 
 ## [Unreleased]
 
+### Fixed — `hands doctor` now reports the voice recording backend, not just whisper
+
+- Voice needs two separate installs: whisper (transcribes a WAV) and a **recording backend** (captures the mic). `doctor` checked only whisper, so a user who ran `hands voice-setup`, got whisper, then ran `--voice` on macOS without SoX hit a runtime `ENOENT` — the exact failure doctor exists to pre-empt. The README promised "doctor reports it"; now it does. A `voice.recorder` check reports the platform's backend, matching `getMicCommand()`'s selection so doctor and the runtime never disagree: macOS `rec` (SoX), Linux `arecord` (ALSA), Windows `ffmpeg`/`sox` with the native PowerShell waveIn fallback. Missing on macOS/Linux is `warn` with the install hint (`brew install sox` / `sudo apt install alsa-utils`); Windows never fails (native fallback). `warn` doesn't flip the exit code — voice is opt-in — and `--skip-whisper` skips the recorder probe too.
+
 ## [0.20.0] - 2026-07-03
 
 hands learns. `--record` requires knowing up front that a task is worth keeping; most people just run the same handful of tasks over and over, paying the model each time. Now every run lands in a local history, and the THIRD similar run promotes the steps hands just executed into a macro — automatically: `✨ learned: 3 similar runs — crystallized 4 steps → macro "auto-pull-main-run"`. Repeat runs get pointed at the $0 path; `hands suggest` ranks everything else worth crystallizing. **The more you use hands, the less it costs.** Minor-version bump for the new behavior + command.

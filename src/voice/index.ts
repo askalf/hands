@@ -83,3 +83,4 @@ export class VoiceInput {
 }
 
 export { isWhisperInstalled, setupWhisper, getWhisperPaths } from './setup.js';
+export { expectedRecorder, type RecorderBackend } from './recorder.js';

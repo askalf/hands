@@ -17,7 +17,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkPlatform } from './platform/index.js';
 import { resolveClaudeInvocation } from './platform/claude-cli.js';
-import { isWhisperInstalled } from './voice/index.js';
+import { isWhisperInstalled, expectedRecorder, type RecorderBackend } from './voice/index.js';
 import { loadConfig, getConfigDir } from './util/config.js';
 import { commandExists } from './platform/index.js';
 import { execFile } from 'node:child_process';
@@ -270,7 +270,7 @@ async function claudeCliChecks(): Promise<CheckResult[]> {
 
 async function voiceChecks(): Promise<CheckResult[]> {
   const ok = await isWhisperInstalled();
-  return [
+  const out: CheckResult[] = [
     {
       id: 'voice.whisper',
       category: 'voice',
@@ -279,6 +279,55 @@ async function voiceChecks(): Promise<CheckResult[]> {
       detail: ok ? 'installed' : 'not installed — run `hands voice-setup` to enable --voice mode',
     },
   ];
+
+  // The mic recorder is a SEPARATE install from whisper: whisper transcribes a
+  // WAV, but nothing produces one without a recording backend, and a user who
+  // has whisper but no SoX/arecord hits a runtime ENOENT — exactly what doctor
+  // exists to pre-empt. Report the platform's backend (matching getMicCommand()
+  // so doctor and --voice never disagree). warn (never fail) on missing —
+  // voice is opt-in, so it must not flip the exit code for someone who never
+  // uses --voice. Gated by skipWhisper along with the whisper check above.
+  const rec = expectedRecorder();
+  const found: string[] = [];
+  for (const cmd of rec.probe) {
+    if (await commandExists(cmd)) found.push(cmd);
+  }
+  out.push(renderRecorderCheck(rec, found));
+  return out;
+}
+
+/**
+ * Render the `voice.recorder` check from a backend and which of its probe
+ * tools were found. Pure — the probing (commandExists) happens in the caller,
+ * so the installed/missing rendering is unit-testable without a real recorder.
+ */
+export function renderRecorderCheck(rec: RecorderBackend, found: string[]): CheckResult {
+  if (found.length > 0) {
+    return {
+      id: 'voice.recorder',
+      category: 'voice',
+      status: 'ok',
+      label: 'recorder',
+      detail: `${found[0]}${rec.hasFallback ? ' (preferred; native waveIn otherwise)' : ''}`,
+    };
+  }
+  if (rec.hasFallback) {
+    // Windows: native PowerShell waveIn always works, so never warn/fail.
+    return {
+      id: 'voice.recorder',
+      category: 'voice',
+      status: 'info',
+      label: 'recorder',
+      detail: 'native PowerShell waveIn (built in — ffmpeg/sox used first if installed)',
+    };
+  }
+  return {
+    id: 'voice.recorder',
+    category: 'voice',
+    status: 'warn',
+    label: 'recorder',
+    detail: `${rec.label} not installed — run \`${rec.installHint}\` for --voice`,
+  };
 }
 
 async function darioChecks(opts: DoctorOptions): Promise<CheckResult[]> {
