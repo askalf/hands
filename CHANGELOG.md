@@ -11,6 +11,11 @@ checklist.
 
 ## [Unreleased]
 
+### Added — `--ui` semantic targeting now works on macOS (AX), not just Windows
+
+- `hands run --ui` lets the agent read the OS accessibility tree and click a control **by name and role** instead of by pixel. It was Windows-only (UIAutomation); it now works on **macOS** too. A new AX enumerator walks the frontmost app's Accessibility tree via `osascript`/JXA System Events (no native code, mirroring the keyboard path) and emits the **same JSON shape** the Windows enumerator does — so `parseUiElements`, the matcher, and the `elementCenter → mouseClick` click path (already cross-platform via `cliclick`) light up `ui_tree` / `click_element` end-to-end with no changes downstream of enumeration.
+- Missing Accessibility permission yields an actionable grant message (System Settings → Privacy & Security → Accessibility) instead of an opaque failure. The Windows path is byte-identical. Linux (AT-SPI) remains unwired and rejects with a clear message. Tool descriptions, `--ui` help, the README platform table + Semantic UI section reflect macOS support.
+
 ## [0.20.0] - 2026-07-03
 
 hands learns. `--record` requires knowing up front that a task is worth keeping; most people just run the same handful of tasks over and over, paying the model each time. Now every run lands in a local history, and the THIRD similar run promotes the steps hands just executed into a macro — automatically: `✨ learned: 3 similar runs — crystallized 4 steps → macro "auto-pull-main-run"`. Repeat runs get pointed at the $0 path; `hands suggest` ranks everything else worth crystallizing. **The more you use hands, the less it costs.** Minor-version bump for the new behavior + command.

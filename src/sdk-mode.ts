@@ -53,7 +53,7 @@ export interface SdkModeOptions {
   recorder?: MacroRecorder | undefined;
   /** When set, the agent gets a `verify` tool + a self-verification instruction (`hands run --verify`): it must prove success with a real check before claiming done. */
   verify?: boolean | undefined;
-  /** When set, the agent gets `ui_tree` + `click_element` tools to target controls by name/role via the OS accessibility tree (`hands run --ui`). Windows-only for now. */
+  /** When set, the agent gets `ui_tree` + `click_element` tools to target controls by name/role via the OS accessibility tree (`hands run --ui`). Windows and macOS. */
   ui?: boolean | undefined;
   /** When set, replaces the default OS-aware system prompt with this exact string. Used by --persona / --system-prompt to swap in custom prompt content. */
   systemPromptOverride?: string | undefined;

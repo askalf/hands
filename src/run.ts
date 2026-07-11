@@ -26,7 +26,7 @@ export interface RunOptions {
   record?: string;
   /** Self-verify: the agent must prove success with a real check before claiming done (`hands run --verify`). Works in both modes. */
   verify?: boolean;
-  /** Semantic UI targeting: give the agent `ui_tree` + `click_element` (accessibility-tree) tools (`hands run --ui`). SDK-mode tools; Windows-only for now. */
+  /** Semantic UI targeting: give the agent `ui_tree` + `click_element` (accessibility-tree) tools (`hands run --ui`). SDK-mode tools; Windows and macOS. */
   ui?: boolean;
   /** When true, skip the dario auto-detect probe at startup. Use when the operator wants explicit api.anthropic.com routing despite dario being available. */
   noDario?: boolean;

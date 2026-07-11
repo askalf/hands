@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   parseUiElements, findElements, elementCenter, describeElement,
   buildUiInstruction, buildUiTreeTool, buildClickElementTool, enumerateUiElements,
+  isAxPermissionError,
 } from '../dist/ui.js';
 
 // ── parseUiElements ─────────────────────────────────────────────────
@@ -21,6 +22,23 @@ test('parseUiElements — array, single object, empty, malformed, nameless', () 
   assert.deepEqual(parseUiElements(''), []);
   assert.deepEqual(parseUiElements('not json'), []);
   assert.equal(parseUiElements('[{"role":"Pane"}]').length, 0, 'entries without a name are dropped');
+});
+
+test('parseUiElements — shapes the macOS JXA (AX) output identically to Windows', () => {
+  // The macOS enumerator emits the SAME JSON shape as PS_ENUM (AX prefix
+  // already stripped in the JXA), so parseUiElements consumes it verbatim.
+  const jxa = JSON.stringify([
+    { name: 'Save', role: 'Button', x: 12, y: 40, w: 70, h: 24, enabled: true },
+    { name: 'File', role: 'MenuBarItem', x: 0, y: 0, w: 40, h: 24, enabled: true },
+    { name: 'Password', role: 'TextField', x: 20, y: 80, w: 200, h: 22, enabled: false },
+  ]);
+  const els = parseUiElements(jxa);
+  assert.equal(els.length, 3);
+  assert.equal(els[0].name, 'Save');
+  assert.equal(els[0].role, 'Button');
+  assert.equal(els[2].enabled, false, 'disabled flag round-trips');
+  // And it flows through the matcher unchanged.
+  assert.deepEqual(findElements(els, { name: 'file' }).map((e) => e.role), ['MenuBarItem']);
 });
 
 // ── findElements ────────────────────────────────────────────────────
@@ -74,6 +92,28 @@ test('enumerateUiElements — returns a well-shaped array on Windows', { skip: p
   }
 });
 
-test('enumerateUiElements — rejects off-Windows with a clear message', { skip: process.platform === 'win32' }, async () => {
-  await assert.rejects(() => enumerateUiElements(), /Windows-only/);
+test('enumerateUiElements — returns a well-shaped array on macOS', { skip: process.platform !== 'darwin' }, async () => {
+  // Requires Accessibility permission; if missing it rejects with the grant
+  // hint rather than hanging — assert one of the two acceptable outcomes.
+  try {
+    const els = await enumerateUiElements();
+    assert.ok(Array.isArray(els), 'returns an array');
+    for (const e of els.slice(0, 5)) {
+      assert.equal(typeof e.name, 'string');
+      assert.equal(typeof e.x, 'number');
+      assert.equal(typeof e.role, 'string');
+    }
+  } catch (err) {
+    assert.match(err.message, /Accessibility permission/, 'the only acceptable failure is the permission hint');
+  }
+});
+
+test('enumerateUiElements — rejects on unsupported platforms (Linux) with a clear message', { skip: process.platform === 'win32' || process.platform === 'darwin' }, async () => {
+  await assert.rejects(() => enumerateUiElements(), /AT-SPI|not wired/);
+});
+
+test('isAxPermissionError — recognizes the macOS grant-needed shapes', () => {
+  assert.equal(isAxPermissionError('System Events got an error: osascript is not allowed assistive access. (-1719)'), true);
+  assert.equal(isAxPermissionError('Not authorized to send Apple events to System Events. (-25211)'), true);
+  assert.equal(isAxPermissionError('execution error: some other failure'), false);
 });
