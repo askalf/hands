@@ -4,14 +4,19 @@ name: Auto release on version bump
 # `version` field differs from the parent commit's. When the version
 # did change, this workflow builds + smoke-tests, creates the matching
 # `vX.Y.Z` tag + GitHub release (CHANGELOG section extracted as notes),
-# and runs `npm publish --access public --provenance` inline.
+# and then DISPATCHES `publish.yml`, which does the tokenless npm
+# publish via OIDC trusted publishing.
 #
-# Why inline-publish rather than relying on `publish.yml` + `release:
-# published` trigger: GitHub doesn't fire downstream workflows for
-# events created by GITHUB_TOKEN (loop protection). Hit on deepdive
-# v0.3.0 — the auto-created release didn't kick publish.yml, required
-# a manual delete+recreate from a human token. Same pattern baked in
-# here preemptively.
+# Why an explicit dispatch rather than relying on `publish.yml`'s
+# `release: published` trigger: GitHub doesn't fire downstream
+# workflows for events created by GITHUB_TOKEN (loop protection). Hit
+# on deepdive v0.3.0 — the auto-created release didn't kick
+# publish.yml, required a manual delete+recreate from a human token.
+# `gh workflow run` from GITHUB_TOKEN works fine (needs
+# `actions: write`), so the release-create → dispatch chain closes
+# that gap without any inline publish or NPM_TOKEN here. If the
+# dispatched publish run fails, the retry is simply re-dispatching
+# publish.yml with the same tag (see npm-drift-watch.yml's runbook).
 
 on:
   pull_request:
@@ -20,9 +25,10 @@ on:
 
 permissions:
   contents: write
-  # id-token: write required for `npm publish --provenance` SLSA
-  # attestation.
-  id-token: write
+  # actions: write lets this workflow `gh workflow run publish.yml` —
+  # the npm publish (and its id-token: write OIDC needs) live entirely
+  # in publish.yml now.
+  actions: write
 
 jobs:
   release:
@@ -59,9 +65,13 @@ jobs:
       - name: Ensure tag doesn't already exist
         if: steps.ver.outputs.changed == 'true'
         run: |
+          # Ask the REMOTE, not the local checkout: actions/checkout with
+          # fetch-depth: 2 doesn't fetch tags, so the previous
+          # `git rev-parse "$TAG"` guard could never see an existing tag —
+          # it was a latent no-op (same bug found on deepdive).
           TAG="v${{ steps.ver.outputs.version }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists — aborting to avoid tag-overwrite."
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists on origin — aborting to avoid tag-overwrite."
             exit 1
           fi
 
@@ -70,7 +80,6 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
 
       - name: npm ci
         if: steps.ver.outputs.changed == 'true'
@@ -121,20 +130,27 @@ jobs:
             echo ""
             echo "---"
             echo ""
-            echo "Built + tested + npm-published inline by \`auto-release.yml\` on this run."
+            echo "Built + tested by \`auto-release.yml\` on this run; npm publish is tokenless via \`publish.yml\` (OIDC trusted publishing), dispatched by this run."
           } > body.md
 
           gh release create "$TAG" --title "$TAG" --notes-file body.md
 
-      - name: npm publish
+      # The npm publish itself happens in publish.yml (the workflow the
+      # npmjs trusted publisher is bound to) — dispatched explicitly
+      # because the GITHUB_TOKEN-created release above won't fire
+      # publish.yml's `release: published` trigger on its own.
+      - name: Dispatch tokenless npm publish (publish.yml)
         if: steps.ver.outputs.changed == 'true'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          gh workflow run publish.yml --ref main -f tag="$TAG"
+          echo "Dispatched publish.yml for $TAG."
 
       - name: Post-release summary
         if: steps.ver.outputs.changed == 'true'
         run: |
           echo "✓ Released v${{ steps.ver.outputs.version }}"
           echo "✓ Triggered by PR #${{ github.event.pull_request.number }}"
-          echo "✓ Published to npm (with SLSA provenance)"
+          echo "✓ Dispatched publish.yml — tokenless npm publish via OIDC trusted publishing (with SLSA provenance)"

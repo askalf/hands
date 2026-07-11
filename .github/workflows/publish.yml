@@ -1,35 +1,48 @@
 name: Publish to npm
 
-# Fires when a GitHub Release is published — the manual-release path for
-# cases where `auto-release.yml`'s PR-merge trigger isn't the right
-# shape (e.g. first release of a repo where `package.json` started at
-# the target version, or bumping an off-master branch). A release
-# created by the maintainer's own `gh release create` DOES fire this
-# (human-token release events fire downstream workflows; GITHUB_TOKEN-
-# created releases don't — that's why auto-release.yml publishes inline).
+# THE publish path for @askalf/hands — tokenless, via npm OIDC trusted
+# publishing. npm mints a short-lived credential from this workflow's
+# GitHub OIDC token; there is no NPM_TOKEN secret anywhere, so there is
+# no token to rot (the 2026-05-07 v0.4.1 stranding — publish E404 on a
+# rotated NPM_TOKEN, unnoticed for 15 days — cannot recur by that path).
 #
-# The release tag should match `package.json` version — the workflow
-# doesn't enforce that, but a mismatched tag/version will either
-# succeed confusingly (if the package.json number isn't on npm) or
-# fail (if it is). Keep them aligned at release-prep time.
+# ⚠️ FILENAME IS LOAD-BEARING: the trusted publisher registered on
+# npmjs.com for @askalf/hands is bound to repository askalf/hands +
+# workflow filename `publish.yml` (no environment). Renaming this file
+# breaks publishing until the npmjs trusted-publisher config is updated
+# to match.
+#
+# How publishes happen:
+#  - Normal path: auto-release.yml creates the vX.Y.Z release, then
+#    explicitly dispatches this workflow with `-f tag=vX.Y.Z`. (It must
+#    dispatch: releases created with GITHUB_TOKEN don't fire downstream
+#    `release: published` workflows — GitHub's loop protection.)
+#  - `release: published` is the manual escape hatch: a release created
+#    by a human token (e.g. maintainer's `gh release create`) fires this
+#    directly.
+#  - `workflow_dispatch` is the retry/backfill path for a stranded
+#    release (used 2026-05-22 to backfill v0.4.1):
+#      gh workflow run publish.yml -R askalf/hands -f tag=vX.Y.Z
+#
+# Every path checks out the tag itself and re-runs the full gate
+# (typecheck / build / test / smoke) before publishing, and a guard
+# refuses to publish if the tag doesn't match package.json's version.
 
 on:
   release:
     types: [published]
-  # workflow_dispatch is the rescue path for a stranded release —
-  # publishes whatever's in package.json on the dispatched ref to npm.
-  # Needed because auto-release.yml's one-axis version-diff gate cannot
-  # retry a failed publish (it short-circuits when HEAD vs HEAD^1 shows
-  # no version bump, regardless of whether npm has the version). Used
-  # 2026-05-22 to backfill v0.4.1 after the 2026-05-07 auto-release run
-  # failed at `npm publish` with E404 (stale NPM_TOKEN); the GitHub
-  # release exists, npm just never got the artifact.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.21.0) — must match package.json version at that tag"
+        required: true
+        type: string
 
 permissions:
   contents: read
-  # id-token: write required for `npm publish --provenance` SLSA
-  # attestation. Without this, publish either fails or skips provenance.
+  # id-token: write is what authenticates the publish: npm exchanges the
+  # GitHub OIDC token for a short-lived publish credential (trusted
+  # publishing) and it also backs the SLSA provenance attestation.
   id-token: write
 
 jobs:
@@ -37,15 +50,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+
+      - name: Guard — tag must match package.json version
+        env:
+          # Via env, not inline ${{ }} in the script — keeps the tag string
+          # out of shell-interpolation reach.
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -eo pipefail
+          VERSION=$(node -pe "require('./package.json').version")
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag '$TAG' does not match package.json version 'v$VERSION' at that ref — refusing to publish."
+            exit 1
+          fi
+          echo "Tag $TAG matches package.json version $VERSION."
+
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          # OIDC trusted publishing needs npm >= 11.5; Node 24 bundles it.
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
       - run: node dist/cli.js --help
+
+      # No NODE_AUTH_TOKEN and no secrets — auth comes from the OIDC
+      # exchange with the trusted publisher registered on npmjs.com.
       - run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
