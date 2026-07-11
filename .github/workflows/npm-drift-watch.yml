@@ -1,0 +1,106 @@
+name: npm drift watch
+
+# Daily check that npm's `latest` matches the newest GitHub release tag.
+# Replaces npm-token-health.yml: with OIDC trusted publishing there is no
+# NPM_TOKEN left to rot — the failure mode worth watching is DRIFT, i.e. a
+# release exists but the publish behind it didn't land (dispatch lost,
+# publish.yml gate failed, registry hiccup, trusted-publisher config
+# changed). Token health only ever caught one cause; drift catches the
+# outcome regardless of cause. (This repo's own v0.4.1 stranded on npm
+# for 15 days in 2026-05 because token rot only surfaced at the next
+# publish attempt — this watch would have flagged it within a day.)
+#
+# Opens ONE deduplicated issue on drift; auto-closes it when npm catches
+# up. A 2-hour grace window keeps in-flight releases from false-alarming.
+
+on:
+  schedule:
+    - cron: '47 4 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare newest release tag vs npm latest
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+          REL_JSON=$(gh api "repos/${{ github.repository }}/releases/latest")
+          TAG=$(echo "$REL_JSON" | node -pe "JSON.parse(require('fs').readFileSync(0,'utf-8')).tag_name")
+          PUBLISHED_AT=$(echo "$REL_JSON" | node -pe "JSON.parse(require('fs').readFileSync(0,'utf-8')).published_at")
+          NPM=$(npm view @askalf/hands version)
+          echo "release tag: $TAG (published $PUBLISHED_AT) · npm latest: $NPM"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "npm=$NPM" >> "$GITHUB_OUTPUT"
+          if [ "$TAG" = "v$NPM" ]; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Grace window: a release cut minutes ago may still be publishing.
+          AGE_S=$(( $(date -u +%s) - $(date -u -d "$PUBLISHED_AT" +%s) ))
+          if [ "$AGE_S" -lt 7200 ]; then
+            echo "Mismatch but release is ${AGE_S}s old (<2h) — in-flight, not drift."
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::npm latest ($NPM) is behind release $TAG (published ${AGE_S}s ago)"
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open issue on drift
+        if: steps.check.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          marker='<!-- hands-npm-drift -->'
+          existing=$(gh issue list -R "${{ github.repository }}" --state open --search "in:body $marker" --json number --jq '.[0].number // ""')
+          if [ -n "$existing" ]; then
+            echo "Existing open drift issue #$existing — leaving alone."
+            exit 0
+          fi
+          body_file=$(mktemp)
+          {
+            echo "$marker"
+            echo ""
+            echo "### npm is behind the newest release"
+            echo ""
+            echo "Release **${{ steps.check.outputs.tag }}** exists, but npm \`latest\` is still **${{ steps.check.outputs.npm }}** more than 2 hours later. The publish behind the release didn't land — dispatch lost, a publish.yml gate failed, or the npm trusted-publisher config for \`@askalf/hands\` no longer matches \`publish.yml\`."
+            echo ""
+            echo "**Impact:** \`npm i -g @askalf/hands\` serves the stale version until this is fixed."
+            echo ""
+            echo "### To fix"
+            echo ""
+            echo "1. Check the failed run: [publish.yml runs](https://github.com/${{ github.repository }}/actions/workflows/publish.yml)"
+            echo "2. Re-run the publish for the tag:"
+            echo "   \`\`\`"
+            echo "   gh workflow run publish.yml -R ${{ github.repository }} -f tag=${{ steps.check.outputs.tag }}"
+            echo "   \`\`\`"
+            echo "3. If it fails at \`npm publish\` with an auth error, verify the trusted publisher on npmjs.com (package settings → Trusted Publisher) still points at \`${{ github.repository }}\` / \`publish.yml\`."
+            echo "4. This issue auto-closes when the next drift check sees npm caught up."
+            echo ""
+            echo "### Workflow run"
+            echo ""
+            echo "[Run #${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > "$body_file"
+          gh issue create -R "${{ github.repository }}" \
+            --title "npm drift: latest release not published to npm" \
+            --body-file "$body_file" \
+            --label "npm-drift"
+
+      - name: Auto-close drift issue when caught up
+        if: steps.check.outputs.drift == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          marker='<!-- hands-npm-drift -->'
+          open_issues=$(gh issue list -R "${{ github.repository }}" --state open --search "in:body $marker" --json number --jq '.[].number')
+          for n in $open_issues; do
+            gh issue close "$n" -R "${{ github.repository }}" --comment "Auto-closed: npm latest (${{ steps.check.outputs.npm }}) matches release ${{ steps.check.outputs.tag }} on [run #${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+          done
