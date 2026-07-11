@@ -10,6 +10,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@askalf/hands"><img src="https://img.shields.io/npm/v/@askalf/hands?color=blue" alt="npm version"></a>
   <a href="https://github.com/askalf/hands/actions/workflows/ci.yml"><img src="https://github.com/askalf/hands/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/askalf/hands"><img src="https://img.shields.io/ossf-scorecard/github.com/askalf/hands?label=OpenSSF%20Scorecard&color=blue" alt="OpenSSF Scorecard"></a>
   <a href="https://github.com/askalf/hands/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@askalf/hands" alt="License"></a>
 </p>
 
