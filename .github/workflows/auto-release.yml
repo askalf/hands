@@ -24,16 +24,21 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
-  # actions: write lets this workflow `gh workflow run publish.yml` —
-  # the npm publish (and its id-token: write OIDC needs) live entirely
-  # in publish.yml now.
-  actions: write
-  id-token: write # keyless Sigstore signing (attest-build-provenance)
-  attestations: write # persist the attestation in GitHub's store
+  contents: read
 
 jobs:
   release:
+    # Write scopes live on the job, not top-level, so the token every other
+    # (future) job gets stays read-only — OpenSSF Scorecard's
+    # Token-Permissions check zeroes on any top-level write.
+    permissions:
+      contents: write # create the vX.Y.Z tag + release, upload assets
+      # actions: write lets this workflow `gh workflow run publish.yml` —
+      # the npm publish (and its id-token: write OIDC needs) live entirely
+      # in publish.yml now.
+      actions: write
+      id-token: write # keyless Sigstore signing (attest-build-provenance)
+      attestations: write # persist the attestation in GitHub's store
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:

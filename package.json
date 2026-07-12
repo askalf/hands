@@ -1,6 +1,6 @@
 {
   "name": "@askalf/hands",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "description": "own your computer-use — your LLM on your own mouse and keyboard. Part of Own Your Stack.",
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
@@ -14,6 +14,8 @@
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build",
     "test": "node --test test/*.test.mjs",
+    "prefuzz": "npm run build",
+    "fuzz": "node fuzz/run.mjs",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build && npm test"
   },
@@ -32,6 +34,7 @@
     "inquirer": "^14.0.0"
   },
   "devDependencies": {
+    "@jazzer.js/core": "^4.0.0",
     "@types/express": "^5.0.0",
     "@types/node": "^22.19.21",
     "typescript": "^6.0.3"
