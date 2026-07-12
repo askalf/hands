@@ -11,6 +11,19 @@ checklist.
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-07-12
+
+Supply-chain hardening release — no runtime behavior change. hands' three untrusted input streams get continuous fuzzing, and the release/CodeQL workflow tokens drop to read-only at the top level. Patch bump so the hardening (and the current README) ships to npm.
+
+### Added — continuous fuzzing of the trust-boundary parsers (ClusterFuzzLite)
+
+- Three Jazzer.js targets pin the fail-safe contracts at the boundaries where hands consumes input it doesn't control. `fuzz/hook_decide.fuzz.js`: the PreToolUse guardrail hook never throws on an arbitrary payload and never denies without a reason — the enforcement seam matters most, because the runtime deliberately fails open and a crash there would silently disable the hard-block list. `fuzz/cli_stream.fuzz.js`: the Claude Code JSONL stream parser yields `[]` on malformed lines and unknown event shapes, never a throw. `fuzz/recipe_parse.fuzz.js`: the recipe frontmatter/step parser never throws, the name validator never accepts a path-traversal shape (recipe names become filenames), and a parsed Recipe survives `serializeRecipe` → reparse.
+- ClusterFuzzLite runs the targets weekly in CI (`cflite.yml`, batch mode); `npm run fuzz` is the fast local repro loop (`FUZZ_SECONDS` overrides the 30s default). The OSS-Fuzz base image is digest-pinned, with a dependabot `docker` entry keeping the pin fresh. Closes the OpenSSF Scorecard Fuzzing check.
+
+### Changed — workflow tokens drop to read-only at the top level
+
+- `auto-release.yml` and `codeql.yml` declared their write scopes (`contents`, `actions`, `security-events`, …) at the workflow level, so every job inherited them. The scopes now live on the single job that uses them and the top level is `contents: read` — closing the three open Scorecard Token-Permissions findings. Same steps, same effective scopes, narrower blast radius.
+
 ## [0.21.0] - 2026-07-11
 
 `hands doctor` stops reporting green on dependencies it never actually checked, and `--ui` semantic targeting crosses from Windows to macOS. Two doctor probes now back promises the README already made: the Wayland `ydotoold` input daemon and the voice recording backend were both assumed present — reported healthy when they could be missing, then turning into a hang-to-timeout or a runtime `ENOENT` the moment you used input or `--voice`. And the accessibility-tree targeting that lets the agent click a control **by name** instead of by pixel — Windows-only since v0.14.0 — now walks the macOS AX tree too, with zero changes downstream of enumeration. Minor bump for the new macOS platform surface.
