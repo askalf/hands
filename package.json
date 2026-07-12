@@ -37,7 +37,7 @@
     "@jazzer.js/core": "^4.0.0",
     "@types/express": "^5.0.0",
     "@types/node": "^22.19.21",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "@anthropic-ai/claude-code": "*",
