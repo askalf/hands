@@ -236,6 +236,10 @@ export interface PendingToolCall {
   summary: string;
   args: Record<string, unknown>;
   startedAt: number;
+  /** Verbatim tool name from the stream (e.g. `Bash`, `PowerShell`) — the CLI recorder maps on this. */
+  rawName: string;
+  /** Full, un-truncated tool input — what `--record` crystallizes; the audit copy above is summarized. */
+  rawInput: Record<string, unknown>;
 }
 
 export function pendingToolCall(event: ToolUseEvent, now: number): PendingToolCall {
@@ -247,6 +251,8 @@ export function pendingToolCall(event: ToolUseEvent, now: number): PendingToolCa
     summary: desc.summary,
     args: summarizeCliToolArgs(event.input),
     startedAt: now,
+    rawName: event.name,
+    rawInput: event.input,
   };
 }
 

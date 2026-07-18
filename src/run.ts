@@ -265,15 +265,24 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
     config.authMode = 'api_key';
   }
 
-  // --record captures full tool inputs at the dispatch site — SDK mode only.
-  if (options.record && config.authMode === 'oauth') {
-    if (!hasSdkCredentials(config.apiKey)) {
-      output.error('--record runs in SDK mode, and no API key is configured.');
-      output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --record.');
+  // --record works in BOTH modes. SDK mode captures at the dispatch
+  // site; Claude Login mode captures from the stream-json feed, whose
+  // tool_use blocks carry full inputs — so recording on a subscription
+  // costs $0 and needs no key. Validate the macro name up front in
+  // either mode: better to refuse before the model runs than after
+  // the work is done.
+  if (options.record) {
+    const { isValidMacroName, loadMacro } = await import('./macros.js');
+    if (!isValidMacroName(options.record)) {
+      output.error(`Invalid macro name "${options.record}". Use letters, digits, dashes, and underscores.`);
       process.exit(1);
     }
-    output.warn('--record runs in SDK mode (capture is at the dispatch site). Forcing SDK mode; route through dario to keep it $0.');
-    config.authMode = 'api_key';
+    let exists = false;
+    try { await loadMacro(options.record); exists = true; } catch { /* not found is what we want */ }
+    if (exists) {
+      output.error(`Macro "${options.record}" already exists. Delete it first (hands macro rm ${options.record}) or pick another name.`);
+      process.exit(1);
+    }
   }
 
   // --ui adds SDK-mode tools (ui_tree / click_element).
@@ -321,6 +330,7 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
         ...(options.verify ? { verify: true } : {}),
         ...(personaResolution ? { persona: personaResolution } : {}),
         ...(resume ? { resume } : {}),
+        ...(options.record ? { record: options.record } : {}),
       });
       if (options.once) {
         if (options.json) {
@@ -329,10 +339,11 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
         if (result.ok === false) {
           process.exitCode = EXIT_TASK_FAILED;
         }
-        // Claude Login mode can't shadow-capture steps (tools run in the
-        // claude child), so learning here is history + reminders only —
-        // `hands suggest` points at the --record path.
-        if (prompt) {
+        // Learning here is history + reminders only — stream capture
+        // powers --record (cli-mode.ts), but shadow trajectories for
+        // auto-crystallize stay SDK-only for now. An explicit --record
+        // skips learning, matching the SDK branch.
+        if (prompt && !options.record) {
           const { recordRunAndMaybeLearn } = await import('./learn.js');
           announceLearn(await recordRunAndMaybeLearn({
             prompt, mode: 'cli', ok: result.ok !== false, turns: result.turns, costUsd: result.costUsd,
@@ -380,19 +391,9 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
       let recorder: MacroRecorder | undefined;
       const recordName = options.record;
       if (recordName) {
-        const { MacroRecorder, isValidMacroName, loadMacro } = await import('./macros.js');
-        if (!isValidMacroName(recordName)) {
-          guardHandle?.close();
-          output.error(`Invalid macro name "${recordName}". Use letters, digits, dashes, and underscores.`);
-          process.exit(1);
-        }
-        let exists = false;
-        try { await loadMacro(recordName); exists = true; } catch { /* not found is what we want */ }
-        if (exists) {
-          guardHandle?.close();
-          output.error(`Macro "${recordName}" already exists. Delete it first (hands macro rm ${recordName}) or pick another name.`);
-          process.exit(1);
-        }
+        // Name validity + collision were already checked up front,
+        // before mode selection.
+        const { MacroRecorder } = await import('./macros.js');
         recorder = new MacroRecorder();
         output.info(`recording → macro "${recordName}" — effectful steps will crystallize into a deterministic, $0 replay.`);
       } else if (!options.dryRun) {
@@ -418,7 +419,7 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
             const { saveMacro } = await import('./macros.js');
             const path = await saveMacro({ name: recordName, prompt, platform: process.platform, createdAt: Date.now(), steps: recorder.steps });
             output.success(`crystallized ${recorder.steps.length} step${recorder.steps.length === 1 ? '' : 's'} → ${path}`);
-            output.info(`replay free (no LLM): hands play ${recordName}  ·  export: hands macro export ${recordName} <file>`);
+            output.info(`replay free (no LLM): hands play ${recordName}  ·  script: hands play ${recordName} --export <file>`);
           } else {
             output.warn(`nothing effectful to record — macro "${recordName}" not saved.`);
           }

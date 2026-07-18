@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import { substituteParams, PLACEHOLDER_RE } from './recipes.js';
 
 export interface MacroStep {
-  /** Tool name: `bash`, `str_replace_based_edit_tool`, or `computer`. */
+  /** Tool name: `bash`, `powershell`, `str_replace_based_edit_tool`, or `computer`. */
   tool: string;
   /** Sub-action for the computer tool (left_click, type, key, …). */
   action?: string | undefined;
@@ -69,7 +69,7 @@ const EFFECTFUL_COMPUTER = new Set([
  * editor `view`), which have no replay value. Pure.
  */
 export function isRecordable(tool: string, action: string | undefined, input: Record<string, unknown>): boolean {
-  if (tool === 'bash') return typeof input['command'] === 'string' && input['command'].length > 0;
+  if (tool === 'bash' || tool === 'powershell') return typeof input['command'] === 'string' && input['command'].length > 0;
   if (tool === 'str_replace_based_edit_tool') return input['command'] !== 'view';
   if (tool === 'computer') return action !== undefined && EFFECTFUL_COMPUTER.has(action);
   // Semantic clicks (--ui) replay by NAME, not coordinates — the most
@@ -245,6 +245,14 @@ export function macroToScript(
     if (step.tool === 'bash' && typeof step.input['command'] === 'string') {
       lines.push(step.input['command'] as string);
       scriptable++;
+    } else if (step.tool === 'powershell' && typeof step.input['command'] === 'string') {
+      // Native in a .ps1; from sh, shell out to powershell.exe.
+      if (ps) {
+        lines.push(step.input['command'] as string);
+      } else {
+        lines.push(`powershell -NoProfile -EncodedCommand ${encodePowerShellCommand(step.input['command'] as string)}`);
+      }
+      scriptable++;
     } else if (step.tool === 'str_replace_based_edit_tool' && step.input['command'] === 'create' &&
                typeof step.input['path'] === 'string') {
       const path = step.input['path'] as string;
@@ -267,11 +275,21 @@ export function macroToScript(
   return { language: ps ? 'powershell' : 'sh', script: lines.join('\n') + '\n', scriptable, manual };
 }
 
+/**
+ * Encode a PowerShell command for `powershell -EncodedCommand` (base64 of
+ * UTF-16LE). The encoded form survives cmd's line-splitting, so multiline
+ * PowerShell replays reliably where multiline bash (execSync → cmd) does
+ * not. Pure.
+ */
+export function encodePowerShellCommand(command: string): string {
+  return Buffer.from(command, 'utf16le').toString('base64');
+}
+
 /** Render a macro step as a one-line preview for `macro show` / play progress. Pure. */
 export function previewStep(step: MacroStep): string {
-  if (step.tool === 'bash') {
+  if (step.tool === 'bash' || step.tool === 'powershell') {
     const c = typeof step.input['command'] === 'string' ? (step.input['command'] as string) : '';
-    return `bash: ${c.length > 80 ? c.slice(0, 80) + '…' : c}`;
+    return `${step.tool}: ${c.length > 80 ? c.slice(0, 80) + '…' : c}`;
   }
   if (step.tool === 'str_replace_based_edit_tool') {
     return `edit ${String(step.input['command'] ?? '')}: ${String(step.input['path'] ?? '')}`;
