@@ -219,7 +219,7 @@ export async function recordRunAndMaybeLearn(input: {
   ok: boolean;
   turns?: number | undefined;
   costUsd?: number | undefined;
-  /** Shadow-captured effectful steps (SDK runs only). */
+  /** Shadow-captured effectful steps — SDK runs from the dispatch site, Claude Login `--once` runs from the stream feed. Absent = learn from history only (no auto-crystallize). */
   steps?: MacroStep[] | undefined;
 }): Promise<LearnOutcome> {
   try {

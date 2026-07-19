@@ -11,6 +11,18 @@ checklist.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-19
+
+Auto-crystallize now works on a Claude subscription. v0.22.0 made explicit `--record` work in Claude Login mode; this completes the loop — the *automatic* learning that promotes a repeated task into a free macro (a 3rd similar run → `auto-<slug>`) was still SDK-mode only, because the CLI branch called the learning hook without a shadow trajectory. Now a `hands run --once` on your subscription shadow-captures its effectful steps from the same stream feed and hands them to the learner, so the flagship "the AI did it three times, here's the $0 replay" behavior fires for Claude Login users too.
+
+### Added
+
+- CLI-mode shadow capture for auto-crystallize: the `--once` scripting path records its successful effectful tool calls (unnamed — never saved as a macro on its own) and feeds them to `recordRunAndMaybeLearn`, so repeated subscription runs auto-promote a macro exactly like SDK runs. Off via `HANDS_NO_LEARN=1` / `config learn:false`, same as before. `powershell` steps captured this way are correctly treated as replay-safe (they replay via `-EncodedCommand`), so a Windows subscription run promotes rather than being held back like multiline bash.
+
+### Fixed
+
+- Stale docs from v0.22.0: the `--record` option was still documented as "SDK mode only," and the CLI learning path claimed shadow trajectories "stay SDK-only." Both now describe the two-mode behavior.
+
 ## [0.22.0] - 2026-07-18
 
 `hands run --record` now works on a Claude subscription. Recording was SDK-mode only — the capture hook lived at the SDK dispatch site, so the flagship crystallize-to-$0-macro flow demanded an API key (or a dario proxy) that most Claude Login users don't have. The stream-json feed CLI mode already parses carries every `tool_use` block with its **full, un-truncated input**, so the recorder now rides the stream instead: run a task on your subscription, and the successful effectful steps crystallize into a macro you replay free with `hands play`. Minor bump for the new `powershell` macro step type.

@@ -22,7 +22,7 @@ export interface RunOptions {
   warden?: boolean;
   /** With --warden: send gray-zone (obfuscated / indirect) calls to warden's LLM judge, which can only escalate the tier (`hands run --warden --judge`). Rides the run's endpoint — $0 through dario. */
   judge?: boolean;
-  /** Crystallize: record this run's effectful tool calls into a deterministic macro of this name (`hands run --record <name>`). SDK mode only (capture is at the dispatch site). */
+  /** Crystallize: record this run's effectful tool calls into a deterministic macro of this name (`hands run --record <name>`). Works in both modes — SDK captures at the dispatch site, Claude Login from the stream-json feed. */
   record?: string;
   /** Self-verify: the agent must prove success with a real check before claiming done (`hands run --verify`). Works in both modes. */
   verify?: boolean;
@@ -339,14 +339,16 @@ export async function run(prompt: string | undefined, options: RunOptions = {}):
         if (result.ok === false) {
           process.exitCode = EXIT_TASK_FAILED;
         }
-        // Learning here is history + reminders only — stream capture
-        // powers --record (cli-mode.ts), but shadow trajectories for
-        // auto-crystallize stay SDK-only for now. An explicit --record
-        // skips learning, matching the SDK branch.
+        // Learn from the run: history + reminders, PLUS the shadow trajectory
+        // (result.steps) captured from the stream, so auto-crystallize works
+        // on a Claude subscription — a 3rd similar run promotes itself to a
+        // $0 macro, same as SDK mode. An explicit --record saves the macro
+        // itself, so it skips learning, matching the SDK branch.
         if (prompt && !options.record) {
           const { recordRunAndMaybeLearn } = await import('./learn.js');
           announceLearn(await recordRunAndMaybeLearn({
             prompt, mode: 'cli', ok: result.ok !== false, turns: result.turns, costUsd: result.costUsd,
+            ...(result.steps ? { steps: result.steps } : {}),
           }));
         }
       }

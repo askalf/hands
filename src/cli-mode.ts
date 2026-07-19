@@ -20,7 +20,7 @@ import {
 import { appendAudit } from './util/audit.js';
 import { saveLastSession } from './util/session-state.js';
 import { CliMacroRecorder } from './cli-record.js';
-import { saveMacro } from './macros.js';
+import { saveMacro, type MacroStep } from './macros.js';
 import { isReplaySafeTrajectory } from './learn.js';
 
 export interface RunResult {
@@ -33,6 +33,8 @@ export interface RunResult {
   sessionId?: string | undefined;
   /** False when the result envelope reported an error subtype (max-turns cutoff, execution error). Absent = unknown, treat as ok. */
   ok?: boolean | undefined;
+  /** The task's successful effectful tool calls, shadow-captured from the stream. Set on the `--once` path so the caller can feed auto-crystallize learning (the CLI cousin of SDK mode's shadow trajectory). */
+  steps?: MacroStep[] | undefined;
 }
 
 interface SessionMemory {
@@ -145,7 +147,13 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
   // a macro. Saved once, on clean session exit (task done under --once,
   // "exit" at the prompt, or Ctrl+C) — a hard crash saves nothing, matching
   // SDK mode where a thrown run never reaches its save.
-  const recorder = options.record ? new CliMacroRecorder() : undefined;
+  //
+  // Also runs UNNAMED on the `--once` scripting path (no --record): a shadow
+  // recorder whose steps feed auto-crystallize learning, so the flagship
+  // "3rd similar run promotes itself to a $0 macro" loop works on a Claude
+  // subscription too — not just in SDK mode. It is never saved as a macro
+  // (saveRecording stays --record-only); the caller reads result.steps.
+  const recorder = (options.record || options.once) ? new CliMacroRecorder() : undefined;
   let recordingSaved = false;
   let firstTask: string | undefined;
   if (options.record) {
@@ -277,6 +285,10 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
       // already saved above, so a follow-up `hands run -c --once` chains.
       if (options.once) {
         await saveRecording();
+        // Hand the shadow trajectory back so the caller can learn from it
+        // (auto-crystallize). --record saves the macro itself above; the
+        // caller skips learning in that case, so this is harmless there.
+        if (recorder) result.steps = [...recorder.steps];
         return result;
       }
 
