@@ -166,6 +166,23 @@ test('recordRunAndMaybeLearn — 1st and 2nd runs record history; 3rd promotes a
   assert.equal(history.filter((h) => h.macro === three.macroName).length, 1, 'only the promoting run carries the macro link');
 });
 
+test('recordRunAndMaybeLearn — CLI-mode runs auto-crystallize too (powershell steps, incl. multiline)', async () => {
+  // The shape a Claude Login `--once` run hands back: powershell steps from
+  // the stream feed. A multiline powershell command must NOT taint the
+  // trajectory (it replays via -EncodedCommand), so it still promotes.
+  const CLI_STEPS = [
+    { tool: 'powershell', input: { command: 'Get-Date' } },
+    { tool: 'powershell', input: { command: "$log = 'a'\nAdd-Content x.log $log" } },
+  ];
+  const prompt = 'append a timestamped line to the pulse log';
+  assert.equal((await recordRunAndMaybeLearn({ prompt, mode: 'cli', ok: true, costUsd: 0, steps: CLI_STEPS })).kind, 'none');
+  assert.equal((await recordRunAndMaybeLearn({ prompt: 'append timestamped line to pulse log', mode: 'cli', ok: true, steps: CLI_STEPS })).kind, 'none');
+  const third = await recordRunAndMaybeLearn({ prompt, mode: 'cli', ok: true, steps: CLI_STEPS });
+  assert.equal(third.kind, 'promoted', 'a 3rd similar CLI run promotes on the subscription');
+  const macro = await loadMacro(third.macroName);
+  assert.deepEqual(macro.steps, CLI_STEPS, 'the CLI shadow trajectory (powershell steps) IS the macro');
+});
+
 test('recordRunAndMaybeLearn — HANDS_NO_LEARN keeps history but silences the automation', async () => {
   process.env.HANDS_NO_LEARN = '1';
   try {
