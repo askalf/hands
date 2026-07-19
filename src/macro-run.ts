@@ -24,6 +24,7 @@ import { checkCommand } from './util/guardrails.js';
 import { appendAudit } from './util/audit.js';
 import {
   loadMacro, saveMacro, applyMacroParams, stepHasPlaceholder, previewStep,
+  encodePowerShellCommand,
   type Macro, type MacroStep,
 } from './macros.js';
 import type { Healer, StepRepair } from './heal.js';
@@ -200,6 +201,18 @@ async function runStep(step: MacroStep, scaleFactor: number): Promise<void> {
     const guard = checkCommand(command);
     if (guard.blocked) throw new Error(`guardrail blocked: ${guard.reason}`);
     execSync(command, { timeout: 30_000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
+    return;
+  }
+  if (step.tool === 'powershell') {
+    const command = step.input['command'];
+    if (typeof command !== 'string') throw new Error('powershell step missing command');
+    // Guardrails check the RAW command text — the encoded form is opaque.
+    const guard = checkCommand(command);
+    if (guard.blocked) throw new Error(`guardrail blocked: ${guard.reason}`);
+    // -EncodedCommand survives cmd's line-splitting: multiline PowerShell
+    // replays reliably where multiline bash (execSync → cmd) does not.
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodePowerShellCommand(command)}`,
+      { timeout: 30_000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
     return;
   }
   if (step.tool === 'str_replace_based_edit_tool') {

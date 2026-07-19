@@ -19,6 +19,9 @@ import {
 } from './cli-stream.js';
 import { appendAudit } from './util/audit.js';
 import { saveLastSession } from './util/session-state.js';
+import { CliMacroRecorder } from './cli-record.js';
+import { saveMacro } from './macros.js';
+import { isReplaySafeTrajectory } from './learn.js';
 
 export interface RunResult {
   text: string;
@@ -52,6 +55,8 @@ export interface CliModeOptions {
   once?: boolean | undefined;
   /** Append the self-verification instruction so the agent proves success before claiming done (`hands run --verify`). */
   verify?: boolean | undefined;
+  /** Crystallize this session's successful effectful tool calls into a macro of this name (`hands run --record <name>` on a subscription). Captured from the stream-json feed — tool_use blocks carry full inputs — and saved on clean session exit. */
+  record?: string | undefined;
 }
 
 /**
@@ -136,6 +141,41 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
   const hookScriptPath = resolve(dirname(fileURLToPath(import.meta.url)), 'hook-pre-tool-use.js');
   await writeFile(settingsPath, JSON.stringify(buildHookSettings(process.execPath, hookScriptPath), null, 2));
 
+  // --record: crystallize this session's successful effectful calls into
+  // a macro. Saved once, on clean session exit (task done under --once,
+  // "exit" at the prompt, or Ctrl+C) — a hard crash saves nothing, matching
+  // SDK mode where a thrown run never reaches its save.
+  const recorder = options.record ? new CliMacroRecorder() : undefined;
+  let recordingSaved = false;
+  let firstTask: string | undefined;
+  if (options.record) {
+    output.info(`recording → macro "${options.record}" — effectful steps will crystallize into a deterministic, $0 replay.`);
+  }
+  const saveRecording = async (): Promise<void> => {
+    if (!options.record || !recorder || recordingSaved) return;
+    recordingSaved = true;
+    if (recorder.steps.length === 0) {
+      output.warn(`nothing effectful to record — macro "${options.record}" not saved.`);
+      return;
+    }
+    try {
+      const path = await saveMacro({
+        name: options.record,
+        ...(firstTask ? { prompt: firstTask } : {}),
+        platform: process.platform,
+        createdAt: Date.now(),
+        steps: recorder.steps,
+      });
+      output.success(`crystallized ${recorder.steps.length} step${recorder.steps.length === 1 ? '' : 's'} → ${path}`);
+      output.info(`replay free (no LLM): hands play ${options.record}  ·  script: hands play ${options.record} --export <file>`);
+      if (!isReplaySafeTrajectory(recorder.steps)) {
+        output.warn('macro holds multiline bash — Windows replays those under cmd unreliably; `hands play --heal` can repair drift.');
+      }
+    } catch (err) {
+      output.error(`could not save macro "${options.record}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -183,6 +223,7 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
         currentPrompt = next;
       }
 
+      if (!firstTask) firstTask = currentPrompt;
       output.info(`\n→ ${currentPrompt}\n`);
 
       const result = await spawnClaude(currentPrompt, config, {
@@ -197,6 +238,7 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
         resumeSessionId: activeSessionId,
         cwd: spawnCwd,
         verify: options.verify,
+        ...(recorder ? { recorder } : {}),
       });
       totalTurns += result.turns;
 
@@ -234,6 +276,7 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
       // Scripting path: one task, no loop. The session pointer was
       // already saved above, so a follow-up `hands run -c --once` chains.
       if (options.once) {
+        await saveRecording();
         return result;
       }
 
@@ -251,6 +294,8 @@ export async function runCliMode(prompt: string | undefined, config: AgentConfig
     try { await unlink(mcpConfigPath); } catch { /* ignore */ }
     try { await unlink(settingsPath); } catch { /* ignore */ }
   }
+
+  await saveRecording();
 
   return {
     text: 'Session ended',
@@ -378,6 +423,8 @@ interface SpawnClaudeOptions {
   cwd?: string | undefined;
   /** Append the self-verification instruction (`hands run --verify`). */
   verify?: boolean | undefined;
+  /** When set, successful effectful tool calls from the stream feed it (`hands run --record` in Claude Login mode). */
+  recorder?: CliMacroRecorder | undefined;
 }
 
 async function spawnClaude(prompt: string, config: AgentConfig, opts: SpawnClaudeOptions): Promise<RunResult> {
@@ -439,6 +486,9 @@ async function spawnClaude(prompt: string, config: AgentConfig, opts: SpawnClaud
             pending.delete(event.toolUseId);
             const entry = auditEntryFor(call, event.isError, Date.now());
             auditChain = auditChain.then(() => appendAudit(entry));
+            // Crystallize AFTER the result: only calls that actually
+            // succeeded become macro steps (failed/hook-blocked never do).
+            if (!event.isError) opts.recorder?.record(call.rawName, call.rawInput);
           }
           break;
         }

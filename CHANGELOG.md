@@ -11,6 +11,19 @@ checklist.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-18
+
+`hands run --record` now works on a Claude subscription. Recording was SDK-mode only — the capture hook lived at the SDK dispatch site, so the flagship crystallize-to-$0-macro flow demanded an API key (or a dario proxy) that most Claude Login users don't have. The stream-json feed CLI mode already parses carries every `tool_use` block with its **full, un-truncated input**, so the recorder now rides the stream instead: run a task on your subscription, and the successful effectful steps crystallize into a macro you replay free with `hands play`. Minor bump for the new `powershell` macro step type.
+
+### Added — `--record` in Claude Login mode
+
+- `hands run --record <name> "<task>"` captures from the stream-json feed when you're on Claude Login (oauth): `Bash` → `bash` steps, `Write`/`Edit` → edit steps, and Claude Code's Windows `PowerShell` tool → a new first-class `powershell` step. Capture commits a step only after its `tool_result` comes back successful — failed or hook-blocked calls never crystallize (the v0.18 lesson, now enforced on both capture paths). The macro saves on clean session exit (`--once` completion, `exit`, or Ctrl+C); a hard crash saves nothing, matching SDK behavior. Macro name validity and collisions are now refused up front in both modes, before the model does any work.
+- New `powershell` macro step: replays via `powershell -NoProfile -EncodedCommand` (base64/UTF-16LE), which survives `cmd`'s line-splitting — so multiline PowerShell replays reliably where multiline bash (execSync → cmd) famously does not, and the win32 replay-safety gate correctly ignores it. Guardrails check the raw command text, never the opaque encoded form. `--export` keeps these steps native in a `.ps1` and shells out via `-EncodedCommand` from an `.sh`.
+
+### Fixed
+
+- The post-record hint pointed at `hands macro export`, a subcommand that doesn't exist — it now points at the real surface, `hands play <name> --export <file>`.
+
 ## [0.21.1] - 2026-07-12
 
 Supply-chain hardening release — no runtime behavior change. hands' three untrusted input streams get continuous fuzzing, and the release/CodeQL workflow tokens drop to read-only at the top level. Patch bump so the hardening (and the current README) ships to npm.
