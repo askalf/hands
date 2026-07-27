@@ -3,7 +3,7 @@
 # `compile_javascript_fuzzer`. See build.sh for the fuzz targets.
 # Digest-pinned (Scorecard Pinned-Dependencies); dependabot's docker ecosystem
 # refreshes the pin so it tracks upstream instead of rotting.
-FROM gcr.io/oss-fuzz-base/base-builder-javascript@sha256:61d74ab736764e98c8e7017dafd8bdd1129f004177dc38eec08bdbb3dd3ea7d8
+FROM gcr.io/oss-fuzz-base/base-builder-javascript@sha256:82ac7524df3474ea0003250393300a72b9191e213b7c22aa0c42107ca75d5dfc
 COPY . $SRC/hands
 WORKDIR $SRC/hands
 COPY .clusterfuzzlite/build.sh $SRC/build.sh
