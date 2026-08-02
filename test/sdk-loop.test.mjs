@@ -291,3 +291,70 @@ test('agent loop: maxTurns caps a model that never stops calling tools', async (
   assert.equal(result.turns, 3);
   assert.equal(client.requests.length, 3);
 });
+
+// ── pricing table + fail-safe fallback ──────────────────────────────
+// The table gates the --budget cutoff (currentCost >= maxBudgetUsd), so a
+// wrong entry in the CHEAP direction silently weakens that safety check
+// rather than just mis-displaying a number. Locks in: a known model prices
+// at its real (verified against platform.claude.com/docs, 2026-08-02) rate,
+// and an unrecognized model falls back to the most expensive KNOWN tier
+// (never a cheaper one) so the fallback can only make the cutoff MORE
+// conservative.
+
+test('pricing: a known model (sonnet-5, introductory rate) prices at $2/$10 per MTok', async () => {
+  const client = scriptedClient([
+    {
+      content: [{ type: 'text', text: 'done' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+    },
+  ]);
+
+  const result = await runSdkMode('one turn', { ...CONFIG, model: 'claude-sonnet-5' }, {
+    dryRun: true,
+    testClient: client,
+    testScreen: SCREEN,
+  });
+
+  // 1M input @ $2 + 1M output @ $10 = $12.00
+  assert.equal(result.costUsd, 12);
+});
+
+test('pricing: an unrecognized model falls back to the most expensive known tier, not sonnet\'s rate', async () => {
+  const client = scriptedClient([
+    {
+      content: [{ type: 'text', text: 'done' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+    },
+  ]);
+
+  const result = await runSdkMode('one turn', { ...CONFIG, model: 'claude-future-model-hands-does-not-know-yet' }, {
+    dryRun: true,
+    testClient: client,
+    testScreen: SCREEN,
+  });
+
+  // Must equal fable-5's rate (1M @ $10 + 1M @ $50 = $60), NOT sonnet-4-6's
+  // ($3/$15 -> $18) — the old bug's silent-cheap fallback.
+  assert.equal(result.costUsd, 60);
+});
+
+test('pricing: an unrecognized model does not silently under-count vs a known model', async () => {
+  // Direct regression guard for the safety property: whatever the fallback
+  // resolves to must never price BELOW any known model in the table — that
+  // would mean a real run could burn past --budget before the loop's own
+  // cost estimate says so. Opus 5 is the most expensive NAMED model in the
+  // table (excluding the fallback tier itself); the fallback must clear it.
+  const usage = { input_tokens: 1_000_000, output_tokens: 1_000_000 };
+  const oneTurn = () => scriptedClient([{ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage }]);
+
+  const unknown = await runSdkMode('one turn', { ...CONFIG, model: 'claude-some-unreleased-model' }, {
+    dryRun: true, testClient: oneTurn(), testScreen: SCREEN,
+  });
+  const opus5 = await runSdkMode('one turn', { ...CONFIG, model: 'claude-opus-5' }, {
+    dryRun: true, testClient: oneTurn(), testScreen: SCREEN,
+  });
+
+  assert.ok(unknown.costUsd >= opus5.costUsd, 'unrecognized-model fallback must never under-price a known model');
+});

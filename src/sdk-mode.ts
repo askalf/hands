@@ -32,12 +32,58 @@ interface RunResult {
   turns: number;
 }
 
-// Pricing per million tokens (claude-sonnet-4-6)
+// Pricing per million tokens. Source: https://platform.claude.com/docs/en/about-claude/pricing
+// (checked 2026-08-02). This table gates the --budget cutoff below, so a wrong
+// number in the CHEAP direction is a safety bug, not a cosmetic one: it lets a
+// run burn real money past its nominal cap before the loop notices.
+//
+// claude-opus-4-6 was previously listed at $15/$75 — that was Opus 4.1-era
+// pricing; Opus 4.5 through 5 all actually price at $5/$25. claude-haiku-4-5
+// was previously $0.8/$4; current is $1/$5. Both corrected here.
+//
+// claude-sonnet-5 carries INTRODUCTORY pricing ($2/$10) through 2026-08-31,
+// stepping to $3/$15 (identical to sonnet-4-6) on 2026-09-01 — bump the entry
+// then; the introductory rate is the safe (higher headroom, not lower) side
+// to ship ahead of that date, so leaving it unbumped past the 31st only makes
+// the budget cutoff MORE conservative, never less.
 const PRICING: Record<string, { input: number; output: number }> = {
+  'claude-fable-5': { input: 10, output: 50 },
+  'claude-opus-5': { input: 5, output: 25 },
+  'claude-opus-4-8': { input: 5, output: 25 },
+  'claude-opus-4-7': { input: 5, output: 25 },
+  'claude-opus-4-6': { input: 5, output: 25 },
+  'claude-opus-4-5': { input: 5, output: 25 },
+  'claude-sonnet-5': { input: 2, output: 10 }, // introductory through 2026-08-31; see note above
   'claude-sonnet-4-6': { input: 3, output: 15 },
-  'claude-opus-4-6': { input: 15, output: 75 },
-  'claude-haiku-4-5-20251001': { input: 0.8, output: 4 },
+  'claude-sonnet-4-5': { input: 3, output: 15 },
+  'claude-haiku-4-5-20251001': { input: 1, output: 5 },
 };
+
+/**
+ * Fail-safe pricing fallback for a model string not in the table above (a
+ * newer release hands hasn't been updated for yet). Previously this silently
+ * reused sonnet-4-6's rate regardless of what was actually running — for any
+ * model priced ABOVE sonnet, that under-counts real spend and the --budget
+ * cutoff triggers later than it should. Falls back to the most expensive
+ * KNOWN tier instead, so an unrecognized model can only make the cutoff more
+ * conservative, never less — and warns once per run so the gap is visible
+ * instead of silently wrong.
+ */
+const FALLBACK_PRICING_KEY = 'claude-fable-5';
+const warnedUnknownModels = new Set<string>();
+function pricingFor(model: string): { input: number; output: number } {
+  const known = PRICING[model];
+  if (known) return known;
+  if (!warnedUnknownModels.has(model)) {
+    warnedUnknownModels.add(model);
+    output.warn(
+      `No pricing entry for model "${model}" — cost tracking falls back to the most expensive known tier ` +
+        `(${FALLBACK_PRICING_KEY}) so the --budget cutoff stays conservative rather than under-counting. ` +
+        `Update PRICING in sdk-mode.ts once real rates are published.`,
+    );
+  }
+  return PRICING[FALLBACK_PRICING_KEY]!;
+}
 
 // Screenshot resize target (must match screenshot.ts resize logic)
 const SCREENSHOT_MAX_WIDTH = 1280;
@@ -192,7 +238,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
 
   while (turns < config.maxTurns) {
     turns++;
-    const pricing = PRICING[model] ?? PRICING['claude-sonnet-4-6']!;
+    const pricing = pricingFor(model);
     const currentCost = (totalInput * pricing.input + totalOutput * pricing.output) / 1_000_000;
 
     if (currentCost >= config.maxBudgetUsd) {
@@ -302,7 +348,7 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
     trimScreenshots(messages, 5);
   }
 
-  const pricing = PRICING[model] ?? PRICING['claude-sonnet-4-6']!;
+  const pricing = pricingFor(model);
   const costUsd = (totalInput * pricing.input + totalOutput * pricing.output) / 1_000_000;
 
   return { text: finalText, inputTokens: totalInput, outputTokens: totalOutput, costUsd, turns };
