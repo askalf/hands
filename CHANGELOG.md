@@ -11,6 +11,38 @@ checklist.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-08-02
+
+Default model moves to Sonnet 5, and the pieces that keep a run inside its
+`--budget` get corrected. Minor bump: default-model change + new pricing-table
+entries + a behavior change in how an unrecognized model prices (#151).
+
+### Changed
+
+- Default model: `claude-sonnet-4-6` → `claude-sonnet-5` (was one generation
+  behind). Verified live in oauth mode before the change.
+- SDK-mode pricing table corrected against current published rates. Two
+  entries were wrong independent of Claude 5: `claude-opus-4-6` was priced at
+  Opus-4.1-era `$15/$75` — actual is `$5/$25`; `claude-haiku-4-5` was
+  `$0.8/$4` — actual is `$1/$5`. Added the Claude 5 family (Fable 5, Opus 5,
+  Sonnet 5 at its introductory `$2/$10` rate through 2026-08-31) and the
+  missing 4.x entries.
+- An unrecognized model no longer silently prices at Sonnet 4.6's rate for
+  `--budget` accounting — it falls back to the most expensive *known* tier
+  instead (can only make the cutoff more conservative, never less) and warns
+  once per run. The table gates a real safety check
+  (`if (currentCost >= maxBudgetUsd) break`), so this was a correctness gap,
+  not a cosmetic one. (#151)
+
+### Fixed
+
+- `--warden` pointed at `@askalf/warden`, which is a 404 on npm — the package
+  was renamed to `@askalf/redstamp`. The import specifier, `--warden`'s help
+  text, and the error message now all say so; the error message also points
+  at `HANDS_WARDEN_PATH` as the path verified working today, since npm's
+  published `@askalf/redstamp` is currently a stale snapshot missing the
+  subpath exports this integration needs. (#150)
+
 ## [0.23.0] - 2026-07-19
 
 Auto-crystallize now works on a Claude subscription. v0.22.0 made explicit `--record` work in Claude Login mode; this completes the loop — the *automatic* learning that promotes a repeated task into a free macro (a 3rd similar run → `auto-<slug>`) was still SDK-mode only, because the CLI branch called the learning hook without a shadow trajectory. Now a `hands run --once` on your subscription shadow-captures its effectful steps from the same stream feed and hands them to the learner, so the flagship "the AI did it three times, here's the $0 replay" behavior fires for Claude Login users too.
