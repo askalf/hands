@@ -658,7 +658,7 @@ Stored at `~/.hands/config.json`, dir auto-created with `0700` perms on POSIX. A
 ```json
 {
   "authMode": "oauth",
-  "model": "claude-sonnet-4-6",
+  "model": "claude-sonnet-5",
   "maxBudgetUsd": 5.00,
   "maxTurns": 50,
   "voice": {
@@ -673,7 +673,7 @@ Stored at `~/.hands/config.json`, dir auto-created with `0700` perms on POSIX. A
 |---|---|---|---|
 | `authMode` | `"oauth"` \| `"api_key"` | `"oauth"` | Set by `hands auth`. OAuth = Claude Login (zero cost). |
 | `apiKey` | string | — | Anthropic API key when `authMode === "api_key"`. Never emitted in user-facing output. |
-| `model` | string | `claude-sonnet-4-6` | Model ID passed to the API. |
+| `model` | string | `claude-sonnet-5` | Model ID passed to the API. |
 | `maxBudgetUsd` | number | `5.00` | SDK-mode budget cap. Run halts cleanly if exceeded. |
 | `maxTurns` | number | `50` | Hard ceiling on turns per task. |
 | `voice.whisperModel` | string | `"base"` | whisper.cpp model size. `tiny` / `base` / `small`. |
