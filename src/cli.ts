@@ -66,7 +66,7 @@ program
   .option('--json', 'Emit one machine-readable JSON object on stdout. Implies --once and silences all decorative output.')
   .option('--dry-run', 'Log every tool call to ~/.hands/audit.jsonl but don\'t actually execute. SDK mode only.')
   .option('--guard', 'Pause for [a]llow / [d]eny / [A]lways / [e]dit / [q]uit before every state-changing action. Forces SDK mode (like --dry-run).')
-  .option('--warden', 'Route each action through warden\'s policy firewall (blocks black, holds red for approval). Forces SDK mode. Needs @askalf/warden installed (or HANDS_WARDEN_PATH).')
+  .option('--warden', 'Route each action through warden\'s policy firewall (blocks black, holds red for approval). Forces SDK mode. Needs @askalf/redstamp installed, or HANDS_WARDEN_PATH pointed at a warden checkout (the reliable path today — see @askalf/redstamp on npm).')
   .option('--judge', 'With --warden: send gray-zone (obfuscated / indirect) actions to warden\'s LLM judge, which deobfuscates and can only RAISE the tier. Rides the run\'s endpoint — $0 through dario.')
   .option('--record <name>', 'Crystallize this run into a deterministic macro of <name> — replay it later free (no LLM) with `hands play <name>`. Works in both Claude Login and SDK mode.')
   .option('--verify', 'Make the agent prove success with a real check before claiming done (states a criterion, then verifies it). Works in both modes.')
