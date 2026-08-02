@@ -11,6 +11,10 @@ checklist.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-08-02
+
+The daemon's `--do` task actions — the fully unattended form, no TTY, running whatever a job's trigger fires — can now be gated through warden's policy firewall. Minor bump: new `--warden`/`--judge` capability on a previously ungated execution path (#153).
+
 ### Added
 
 - `--warden`/`--judge` now reach a `--do` task action's own tool calls, in both `hands watch --do --warden` and `hands job add --do ... --warden` (the daemon's unattended, durable form). Previously `--warden` on a job was only wired to `--play --heal`'s repair step — `validateJob` outright rejected `--warden` on a task action, so a daemon job's LLM-driven `--do` execution had no policy-gating path at all, by construction rather than by omission. `--judge` (warden's gray-zone deobfuscator) is new alongside it, valid only with `--warden` on a task action. Both fail closed on red-tier the same way `hands run --warden` already does when unattended (no TTY).
