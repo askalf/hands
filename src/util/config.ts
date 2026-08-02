@@ -24,7 +24,9 @@ const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
 const DEFAULT_CONFIG: AgentConfig = {
   authMode: 'oauth',
-  model: 'claude-sonnet-4-6',
+  // claude-sonnet-5 (was claude-sonnet-4-6 — one generation behind). Verified
+  // live in oauth mode before this change (real response, $0 via subscription).
+  model: 'claude-sonnet-5',
   maxBudgetUsd: 5.0,
   maxTurns: 50,
 };
