@@ -14,11 +14,17 @@
 // at ~/.warden/audit.jsonl — the same log warden's other surfaces write.
 //
 // warden is an OPTIONAL integration: it isn't a hands dependency (the core
-// six stay six). `--warden` loads `@askalf/warden` dynamically and errors
-// helpfully if it isn't installed. Until warden is on npm, point hands at a
-// local checkout with HANDS_WARDEN_PATH. The bridge is split so the gate's
+// six stay six). `--warden` loads `@askalf/redstamp` dynamically (the warden
+// project's current name — the package published to npm as `@askalf/warden`
+// was renamed, and the npm registry copy of @askalf/redstamp as of 2026-08 is
+// a stale early snapshot missing the /wrap, /audit, /judge, /mcp subpath
+// exports this file needs) and errors helpfully if it can't be loaded. Until
+// a current redstamp build reaches npm, point hands at a local checkout with
+// HANDS_WARDEN_PATH — verified working end-to-end against a same-day checkout
+// of github.com/askalf/warden (the repo itself kept its original name; only
+// the published package was renamed). The bridge is split so the gate's
 // decision logic is unit-testable with an injected fake firewall — no real
-// warden needed for tests.
+// warden/redstamp needed for tests.
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -66,10 +72,11 @@ export type WardenOutcome =
 
 /**
  * Load warden's API. Resolution order: an explicit HANDS_WARDEN_PATH
- * checkout, then the installed `@askalf/warden` package. Specifiers are
- * built as non-literal expressions so the TypeScript compiler doesn't try
- * to resolve an optional, possibly-absent module at build time. Throws a
- * directed error when warden can't be found.
+ * checkout, then the installed `@askalf/redstamp` package (warden's current
+ * published name — see the file header on why HANDS_WARDEN_PATH is the
+ * reliable path today). Specifiers are built as non-literal expressions so
+ * the TypeScript compiler doesn't try to resolve an optional, possibly-absent
+ * module at build time. Throws a directed error when neither resolves.
  */
 export async function loadWardenApi(): Promise<WardenApi> {
   const base = process.env['HANDS_WARDEN_PATH'];
@@ -83,7 +90,7 @@ export async function loadWardenApi(): Promise<WardenApi> {
       const mcp = await import(pathToFileURL(join(base, 'src', 'mcp.mjs')).href);
       return { guardToolUse: wrap.guardToolUse, loadPolicy: policy.loadPolicy, ChainedFileAudit: audit.ChainedFileAudit, checkAsync: idx.checkAsync, makeJudge: judge.makeJudge, mapMcpToAction: mcp.mapMcpToAction };
     }
-    const pkg = '@askalf/warden';
+    const pkg = '@askalf/redstamp';
     const wrap = await import(`${pkg}/wrap`);
     const idx = await import(`${pkg}`);
     const audit = await import(`${pkg}/audit`);
@@ -93,8 +100,10 @@ export async function loadWardenApi(): Promise<WardenApi> {
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `--warden needs @askalf/warden, which couldn't be loaded. Install it (npm i -g @askalf/warden) ` +
-        `or set HANDS_WARDEN_PATH to a warden checkout. (${detail})`,
+      `--warden needs @askalf/redstamp (warden's current name), which couldn't be loaded — the npm registry ` +
+        `copy is currently a stale snapshot missing the pieces this needs. The path known to work today: ` +
+        `set HANDS_WARDEN_PATH to a checkout of github.com/askalf/warden (repo name predates the package ` +
+        `rename). Once a current build reaches npm, \`npm i -g @askalf/redstamp\` will also work. (${detail})`,
     );
   }
 }
