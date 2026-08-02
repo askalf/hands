@@ -695,6 +695,8 @@ program
   .option('--play <macro>', 'Replay this recorded macro on each fire — zero LLM.')
   .option('--heal', 'With --play: a failing macro step brings the model back to repair it, then the replay continues (SDK mode; route through dario to keep it $0).')
   .option('--commit', 'With --play --heal: write repaired steps back into the macro — the automation converges back to $0 replays after drift.')
+  .option('--warden', "With --do: gate the task's tool calls through warden's policy firewall (blocks black, holds red for approval; unattended — no watch has a TTY — so red fails closed). Forces SDK mode.")
+  .option('--judge', "With --do --warden: send gray-zone (obfuscated/indirect) calls to warden's LLM judge, escalate-only, $0 via dario.")
   .option('--interval <ms>', 'Poll interval in ms for file/clipboard/command triggers (default 2000).', '2000')
   .option('--max <n>', 'Stop after N fires.')
   .option('--once', 'Fire once, then exit.')
@@ -736,6 +738,14 @@ program
       output.error('--commit only works with --heal: there is nothing to commit unless a failing step gets repaired.');
       process.exit(1);
     }
+    if (opts.warden && !opts.do) {
+      output.error('--warden gates a --do task\'s tool calls — use it with --do "<task>". (A --play macro replay has nothing to gate; --play --heal has its own --warden semantics via `hands play`.)');
+      process.exit(1);
+    }
+    if (opts.judge && !opts.warden) {
+      output.error('--judge only works with --warden: the judge is consulted on warden\'s gray-zone verdicts.');
+      process.exit(1);
+    }
     if (opts.heal) {
       // A watcher can run for days — discovering missing SDK credentials at
       // 3am, on the fire that needed a repair, is too late. Fail at start.
@@ -744,6 +754,16 @@ program
       if (!hasSdkCredentials((await loadConfig()).apiKey)) {
         output.error('--heal runs repairs in SDK mode, and no API key is configured.');
         output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --heal.');
+        process.exit(1);
+      }
+    }
+    if (opts.warden) {
+      // Same reasoning as --heal above: fail at watch start, not 3am on the first fire.
+      const { loadConfig } = await import('./util/config.js');
+      const { hasSdkCredentials } = await import('./run.js');
+      if (!hasSdkCredentials((await loadConfig()).apiKey)) {
+        output.error('--warden runs in SDK mode, and no API key is configured.');
+        output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --warden.');
         process.exit(1);
       }
     }
@@ -768,6 +788,8 @@ program
       noDario: opts.dario === false,
       heal: !!opts.heal,
       commit: !!opts.commit,
+      warden: !!opts.warden,
+      judge: !!opts.judge,
     });
   });
 
@@ -788,7 +810,8 @@ jobCmd
   .option('--play <macro>', 'Replay this recorded macro on each fire — zero LLM.')
   .option('--heal', 'With --play: a failing macro step is repaired by the model (SDK mode; dario keeps it $0).')
   .option('--commit', 'With --heal: repairs crystallize back into the macro.')
-  .option('--warden', "With --heal: gate the healer through warden's policy firewall (unattended: red fails closed).")
+  .option('--warden', "Gate through warden's policy firewall — with --do, gates the task's own tool calls directly; with --play --heal, gates the healer. Either way the daemon never has a TTY, so red fails closed.")
+  .option('--judge', "With --do --warden: send gray-zone (obfuscated/indirect) calls to warden's LLM judge, escalate-only, $0 via dario.")
   .option('--interval <ms>', 'Poll interval for file/clipboard/command triggers (default 2000).', '2000')
   .option('--force', 'Overwrite an existing job of the same name.')
   .action(async (name, opts) => {
@@ -839,6 +862,7 @@ jobCmd
       heal: !!opts.heal,
       commit: !!opts.commit,
       warden: !!opts.warden,
+      judge: !!opts.judge,
       enabled: true,
       createdAt: Date.now(),
     };
@@ -856,12 +880,13 @@ jobCmd
         process.exit(1);
       }
     }
-    if (job.heal) {
+    if (job.heal || job.warden) {
       const { loadConfig } = await import('./util/config.js');
       const { hasSdkCredentials } = await import('./run.js');
       if (!hasSdkCredentials((await loadConfig()).apiKey)) {
-        output.error('--heal runs repairs in SDK mode, and no API key is configured.');
-        output.info('Run `hands auth` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop --heal.');
+        const flag = job.heal ? '--heal' : '--warden';
+        output.error(`${flag} runs in SDK mode, and no API key is configured.`);
+        output.info(`Run \`hands auth\` to add a key, set ANTHROPIC_API_KEY in the environment (e.g. for dario routing), or drop ${flag}.`);
         process.exit(1);
       }
     }

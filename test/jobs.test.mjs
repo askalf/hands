@@ -46,6 +46,16 @@ test('validateJob — a good job has no errors', () => {
   assert.deepEqual(validateJob(JOB), []);
   assert.deepEqual(validateJob({ ...JOB, trigger: { kind: 'schedule', at: '07:30' }, intervalMs: undefined }), []);
   assert.deepEqual(validateJob({ ...JOB, heal: false, commit: false, action: { kind: 'task', task: 'do things' } }), []);
+  // --warden on a --do task action needs no --heal: it gates the task's own
+  // tool calls directly, same as `hands run --warden`.
+  assert.deepEqual(
+    validateJob({ ...JOB, heal: false, commit: false, action: { kind: 'task', task: 'do things' }, warden: true }),
+    [],
+  );
+  assert.deepEqual(
+    validateJob({ ...JOB, heal: false, commit: false, action: { kind: 'task', task: 'do things' }, warden: true, judge: true }),
+    [],
+  );
 });
 
 test('validateJob — every broken shape produces a fix-it error', () => {
@@ -57,7 +67,15 @@ test('validateJob — every broken shape produces a fix-it error', () => {
   assert.ok(validateJob({ ...JOB, intervalMs: 10 }).length > 0, 'sub-floor interval (hot-loop guard)');
   assert.ok(validateJob({ ...JOB, action: { kind: 'task', task: 'x' }, heal: true }).length > 0, 'heal on a task action');
   assert.ok(validateJob({ ...JOB, heal: false, commit: true }).length > 0, 'commit without heal');
-  assert.ok(validateJob({ ...JOB, heal: false, commit: false, warden: true }).length > 0, 'warden without heal');
+  assert.ok(validateJob({ ...JOB, heal: false, commit: false, warden: true }).length > 0, 'warden on a --play job without heal');
+  assert.ok(
+    validateJob({ ...JOB, heal: false, commit: false, action: { kind: 'task', task: 'x' }, judge: true }).length > 0,
+    'judge without warden',
+  );
+  assert.ok(
+    validateJob({ ...JOB, warden: true, judge: true }).length > 0,
+    'judge on a macro/heal job — play has no judge integration',
+  );
   assert.ok(validateJob({ ...JOB, trigger: { kind: 'nope' } }).length > 0, 'unknown trigger kind');
 });
 
@@ -91,12 +109,29 @@ test('buildActionArgs — task action: substituted prompt via run --once', () =>
   );
 });
 
+test('buildActionArgs — task action: --warden/--judge reach the child argv', () => {
+  const job = { ...JOB, heal: false, commit: false, action: { kind: 'task', task: 'do things' } };
+  assert.deepEqual(buildActionArgs({ ...job, warden: true }, {}), ['run', '--once', 'do things', '--warden']);
+  assert.deepEqual(
+    buildActionArgs({ ...job, warden: true, judge: true }, {}),
+    ['run', '--once', 'do things', '--warden', '--judge'],
+  );
+  assert.deepEqual(buildActionArgs(job, {}), ['run', '--once', 'do things'], 'no gate by default');
+});
+
 test('describeJob — one-liner carries trigger, cadence, and action', () => {
   const line = describeJob(JOB);
   assert.match(line, /new file matching/);
   assert.match(line, /every 2000ms/);
   assert.match(line, /play ingest-csv \(heal\+commit\)/);
   assert.match(describeJob({ ...JOB, trigger: { kind: 'schedule', at: '07:00' } }), /daily at 07:00 → /);
+});
+
+test('describeJob — a warden-gated task action shows the gate', () => {
+  const job = { ...JOB, heal: false, commit: false, action: { kind: 'task', task: 'read the file and act on it' } };
+  assert.match(describeJob({ ...job, warden: true }), /\(warden\)/);
+  assert.match(describeJob({ ...job, warden: true, judge: true }), /\(warden\+judge\)/);
+  assert.doesNotMatch(describeJob(job), /\(warden/);
 });
 
 // ── fs: CRUD ────────────────────────────────────────────────────────

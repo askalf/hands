@@ -29,8 +29,10 @@ export interface Job {
   heal?: boolean | undefined;
   /** Macro actions, with heal: commit repairs back into the macro. */
   commit?: boolean | undefined;
-  /** Macro actions, with heal: gate the healer through warden (fails closed unattended). */
+  /** Task actions: gate the run through warden's policy firewall. Macro actions, with heal: gate the healer the same way. Either way, fails closed unattended (a daemon-spawned action never has a TTY). */
   warden?: boolean | undefined;
+  /** Task actions, with warden: send gray-zone (obfuscated/indirect) calls to warden's LLM judge, escalate-only, $0 via dario. Not available on macro/heal — `play` has no judge integration. */
+  judge?: boolean | undefined;
   enabled: boolean;
   createdAt: number;
 }
@@ -96,11 +98,15 @@ export function validateJob(job: Job): string[] {
   } else if (a.kind === 'macro' && !a.name?.trim()) {
     errors.push('Macro action needs a macro name.');
   }
-  if ((job.heal || job.commit || job.warden) && a?.kind !== 'macro') {
-    errors.push('--heal/--commit/--warden repair macro replays — they need a --play action.');
+  if ((job.heal || job.commit) && a?.kind !== 'macro') {
+    errors.push('--heal/--commit repair macro replays — they need a --play action.');
   }
   if (job.commit && !job.heal) errors.push('--commit only works with --heal.');
-  if (job.warden && !job.heal) errors.push('--warden on a job gates the healer — pass --heal too.');
+  if (job.warden && a?.kind === 'macro' && !job.heal) {
+    errors.push('--warden on a --play job gates the healer — pass --heal too (a deterministic replay with no heal has nothing to gate).');
+  }
+  if (job.judge && !job.warden) errors.push('--judge needs --warden too.');
+  if (job.judge && a?.kind === 'macro') errors.push('--judge only applies to --do task actions — play/--heal has no judge integration.');
   return errors;
 }
 
@@ -129,14 +135,17 @@ export function buildActionArgs(job: Job, context: Record<string, string>): stri
     if (job.warden) args.push('--warden');
     return args;
   }
-  return ['run', '--once', substituteContext(job.action.task, context)];
+  const args = ['run', '--once', substituteContext(job.action.task, context)];
+  if (job.warden) args.push('--warden');
+  if (job.judge) args.push('--judge');
+  return args;
 }
 
 /** One-line summary for `job list` / daemon startup. Pure. */
 export function describeJob(job: Job): string {
   const action = job.action.kind === 'macro'
     ? `play ${job.action.name}${job.heal ? ' (heal' + (job.commit ? '+commit' : '') + (job.warden ? '+warden' : '') + ')' : ''}`
-    : `run: ${job.action.task.length > 50 ? job.action.task.slice(0, 50) + '…' : job.action.task}`;
+    : `run: ${job.action.task.length > 50 ? job.action.task.slice(0, 50) + '…' : job.action.task}${job.warden ? ' (warden' + (job.judge ? '+judge' : '') + ')' : ''}`;
   const every = job.trigger.kind === 'schedule' ? '' : ` every ${job.intervalMs ?? DEFAULT_POLL_MS}ms`;
   return `${describeTrigger(job.trigger)}${every} → ${action}`;
 }

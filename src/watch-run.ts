@@ -27,6 +27,10 @@ export interface RunWatchOptions {
   heal?: boolean | undefined;
   /** Macro actions, with heal: write repaired steps back into the macro. */
   commit?: boolean | undefined;
+  /** Task actions: gate the run through warden's policy firewall (fails closed unattended). */
+  warden?: boolean | undefined;
+  /** Task actions, with warden: send gray-zone calls to warden's LLM judge, escalate-only, $0 via dario. */
+  judge?: boolean | undefined;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -97,7 +101,12 @@ async function runAction(action: WatchAction, context: Record<string, string>, o
     return;
   }
   const { run } = await import('./run.js');
-  await run(substitute(action.task, context), { once: true, ...(opts.noDario ? { noDario: true } : {}) });
+  await run(substitute(action.task, context), {
+    once: true,
+    ...(opts.noDario ? { noDario: true } : {}),
+    ...(opts.warden ? { warden: true } : {}),
+    ...(opts.judge ? { judge: true } : {}),
+  });
 }
 
 /** Poll the trigger and run the action on each fire. Runs until once/max or Ctrl+C. */
