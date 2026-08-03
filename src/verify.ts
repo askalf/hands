@@ -14,6 +14,7 @@
 
 import { execSync } from 'node:child_process';
 import { checkCommand } from './util/guardrails.js';
+import { encodePowerShellCommand } from './macros.js';
 
 /**
  * The self-verification instruction appended to the system prompt. When a
@@ -67,7 +68,19 @@ export function runVerifyCheck(command: string): VerifyOutcome {
     return { ok: false, exitCode: -1, output: `guardrail blocked the verify command: ${guard.reason}` };
   }
   try {
-    const out = execSync(command, { timeout: 30_000, encoding: 'utf-8', maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    // On Windows the verify command is PowerShell (the instruction/tool
+    // description hands the model `Test-Path`, not `test -f`), so it must run
+    // through powershell.exe — a raw execSync would run it in cmd.exe where
+    // cmdlets don't exist. -EncodedCommand mirrors the shell + macro executors.
+    // `; exit $LASTEXITCODE` propagates a native command's exit code as
+    // powershell.exe's own — PowerShell otherwise exits 0 even when the last
+    // native command failed. An explicit `exit N` inside the command runs
+    // first and wins; a pure-cmdlet check with no exit leaves $LASTEXITCODE
+    // null → exit 0 (the check passed).
+    const toRun = process.platform === 'win32'
+      ? `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodePowerShellCommand(command + '\n; exit $LASTEXITCODE')}`
+      : command;
+    const out = execSync(toRun, { timeout: 30_000, encoding: 'utf-8', maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
     return { ok: true, exitCode: 0, output: trim(out) };
   } catch (err) {
     const e = err as { status?: number | null; stdout?: string; stderr?: string; message?: string };
