@@ -128,18 +128,21 @@ test('buildSdkSystemPrompt(linux) — Linux label + xdotool / ydotool / display-
   assert.doesNotMatch(p, /## macOS Gotchas/);
 });
 
-test('buildSdkSystemPrompt — bash-tool framing on every OS (pre-feature behavior preserved)', () => {
-  // Pre-feature, the SDK prompt opened with "Use the bash tool with
-  // PowerShell commands". Post-feature, the framing is generic shell
-  // commands — but the "use bash tool over computer tool" guidance is
-  // the same on every OS.
+test('buildSdkSystemPrompt — shell-tool framing names the platform shell (powershell on Windows, bash on Unix)', () => {
+  // Windows SDK mode drives a native `powershell` tool, so the prompt must
+  // name PowerShell — NOT "bash", which biased the model toward Unix idioms
+  // that ran through cmd.exe and failed. Unix keeps the bash-tool framing.
+  const shellFor = { win32: 'powershell', darwin: 'bash', linux: 'bash' };
   for (const platform of ['win32', 'darwin', 'linux']) {
     const p = buildSdkSystemPrompt(platform);
-    assert.match(p, /bash tool with shell commands/, `[${platform}] bash-tool guidance missing`);
-    assert.match(p, /Prefer bash tool over computer tool/, `[${platform}] preference rule missing`);
+    const shell = shellFor[platform];
+    assert.match(p, new RegExp(`${shell} tool with shell commands`), `[${platform}] ${shell}-tool guidance missing`);
+    assert.match(p, new RegExp(`Prefer ${shell} tool over computer tool`), `[${platform}] preference rule missing`);
     assert.match(p, /screenshot-click loops/, `[${platform}] anti-screenshot framing missing`);
     assert.match(p, /destructive|Guardrails|guardrails/, `[${platform}] guardrail content missing`);
   }
+  // Windows must NOT tell the model to use the bash tool.
+  assert.doesNotMatch(buildSdkSystemPrompt('win32'), /bash tool/, 'Windows SDK prompt should not name the bash tool');
 });
 
 // ── Cross-OS leak guards (regression: the bug we just fixed) ────────

@@ -374,22 +374,22 @@ ${sessionContext}`;
 // ── SDK mode (shorter prompt, OS-aware) ─────────────────────────────
 
 const WINDOWS_SDK_BLOCK = `## Windows Gotchas
-- ALWAYS wrap Windows commands in: powershell -Command "..."
-- NEVER use bare app names for Windows built-ins (notepad, paint, calc) — triggers Store redirect dialog
-- CORRECT: powershell -Command "Start-Process 'C:\\Windows\\System32\\notepad.exe'"
-- WRONG: powershell -Command "Start-Process notepad" — opens Store dialog, app never launches
-- For typing into apps: powershell -Command "Start-Process 'C:\\Windows\\System32\\notepad.exe'; Start-Sleep -Seconds 2; Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('text')"
-- Start-Process is async — MUST sleep 2 seconds before interacting with the opened window
-- Use semicolons to chain PowerShell, not && (bash syntax)
-- If a command "succeeded" but nothing happened, app is stuck at a Store/UAC dialog — use full .exe path
+- The \`powershell\` tool IS a PowerShell session — write PowerShell directly. Do NOT wrap commands in \`powershell -Command "..."\` (that would nest a shell inside itself), and do NOT reach for bash/Unix syntax (ls, cat, grep, &&, /mnt/c) — none of it applies here.
+- Chain with \`;\` not \`&&\`. Env vars are \`$env:VAR\`. There is no cmd.exe and no bash.
+- NEVER use bare app names for Windows built-ins (notepad, paint, calc) — triggers the Store redirect dialog. Use the full .exe path.
+- CORRECT: Start-Process 'C:\\Windows\\System32\\notepad.exe'
+- WRONG: Start-Process notepad — opens the Store dialog, app never launches
+- For typing into apps: Start-Process 'C:\\Windows\\System32\\notepad.exe'; Start-Sleep -Seconds 2; Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('text')
+- Start-Process is async — MUST sleep ~2 seconds before interacting with the opened window
+- If a command "succeeded" but nothing happened, the app is stuck at a Store/UAC dialog — use the full .exe path
 
 ## PowerShell patterns
-- Open apps: powershell -Command "Start-Process chrome 'https://url.com'" or "Start-Process 'C:\\Windows\\System32\\notepad.exe'"
-- File ops: powershell -Command "Get-Content 'file.txt'" / "Set-Content 'file.txt' 'content'"
-- Window management: powershell -Command "(New-Object -ComObject Shell.Application).MinimizeAll()"
-- Clipboard: powershell -Command "Set-Clipboard 'text'"
-- Install software: powershell -Command "winget install --id 'App.Name' --accept-package-agreements"
-- Git/npm/docker: run directly in bash (these work fine without powershell wrapper)`;
+- Open apps: Start-Process chrome 'https://url.com'  /  Start-Process 'C:\\Windows\\System32\\notepad.exe'
+- File ops: Get-Content 'file.txt'  /  Set-Content 'file.txt' 'content'  /  Get-ChildItem -Recurse -Filter '*.pdf'
+- Window management: (New-Object -ComObject Shell.Application).MinimizeAll()
+- Clipboard: Set-Clipboard 'text'  /  Get-Clipboard
+- Install software: winget install --id 'App.Name' --accept-package-agreements
+- git / npm / docker: invoke them directly (they are on PATH — no wrapper needed)`;
 
 const MACOS_SDK_BLOCK = `## macOS Gotchas
 - Use \`open -a "AppName"\` to launch apps; macOS resolves /Applications/AppName.app
@@ -440,7 +440,11 @@ function osBlockForSdk(platform: SupportedPlatform): string {
  */
 export function buildSdkSystemPrompt(platform: SupportedPlatform): string {
   const osLabel = OS_LABEL[platform];
-  return `You are a computer control agent on ${osLabel}. CRITICAL: Use the bash tool with shell commands instead of screenshot-click loops whenever possible.
+  // Windows drives PowerShell through a native `powershell` tool; Unix uses the
+  // bash tool. Name the actual tool so the model doesn't reach for Unix idioms
+  // on Windows (which then run through cmd.exe and fail).
+  const shellTool = platform === 'win32' ? 'powershell' : 'bash';
+  return `You are a computer control agent on ${osLabel}. CRITICAL: Use the ${shellTool} tool with shell commands instead of screenshot-click loops whenever possible.
 
 ## Self-Correction
 1. If a command fails, DO NOT retry it. Analyze the error and try a DIFFERENT approach.
@@ -448,7 +452,7 @@ export function buildSdkSystemPrompt(platform: SupportedPlatform): string {
 3. If a task takes more than 3 turns, STOP and reconsider — you're overcomplicating it.
 
 ## Rules
-1. Prefer bash tool over computer tool for ALL tasks that can be done via command line.
+1. Prefer ${shellTool} tool over computer tool for ALL tasks that can be done via command line.
 2. **For reading web pages: ALWAYS use the read_page tool, NEVER navigate to a URL with the computer tool.** read_page fetches the URL and returns cleaned HTML directly to you — no browser, no screenshot, no JavaScript. Use it for: reading articles, browsing docs, GitHub READMEs, news pages, JSON APIs, RSS feeds. The computer tool is for clicking and typing into a UI; reading content does not need the UI.
 3. **For locating files or searching code: use the find_files tool, not chained bash ls + cat + grep calls.** One find_files turn replaces 3-10 bash turns. List mode (name_pattern like "*.ts") enumerates files; grep mode (also pass grep) returns file:line:content matches. It already skips node_modules / .git / dist / build / etc. so you don't need to remember exclude flags.
 4. Only use the computer tool (screenshot/click) when the task genuinely requires visual interaction.

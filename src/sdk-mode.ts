@@ -18,6 +18,7 @@ import { findFiles } from './tools/find-files.js';
 import { classifyToolUse, previewToolUse, GuardAbort, type GuardController } from './util/guard.js';
 import type { WardenGate } from './util/warden.js';
 import type { MacroRecorder } from './macros.js';
+import { encodePowerShellCommand } from './macros.js';
 import { buildVerifyInstruction, buildVerifyTool, runVerifyCheck, formatVerifyResult } from './verify.js';
 import {
   enumerateUiElements, findElements, elementCenter, describeElement,
@@ -136,6 +137,8 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
   const initialSs = opts.testScreen ? await opts.testScreen.screenshot() : await takeScreenshot();
   const ssMediaType = initialSs.mediaType;
 
+  const isWindows = process.platform === 'win32';
+
   const tools: Anthropic.Beta.BetaTool[] = [
     {
       type: 'computer_20251124' as unknown as 'computer_20241022',
@@ -147,10 +150,28 @@ export async function runSdkMode(prompt: string, config: AgentConfig, opts: SdkM
       // captures come back at full resolution via takeScreenshot.
       enable_zoom: true,
     } as unknown as Anthropic.Beta.BetaTool,
-    {
-      type: 'bash_20250124' as unknown as 'bash_20241022',
-      name: 'bash',
-    } as unknown as Anthropic.Beta.BetaTool,
+    // Shell tool. On Windows the model drives PowerShell DIRECTLY via a
+    // custom `powershell` tool — NOT the Anthropic `bash` server tool, which
+    // biases the model toward Unix syntax that then runs through cmd.exe (via
+    // execSync) and fails. A native powershell tool means commands are written
+    // in PowerShell and recorded as `powershell` macro steps that replay $0
+    // through the existing powershell executor. Unix keeps the bash tool.
+    isWindows
+      ? ({
+          name: 'powershell',
+          description: 'Run a Windows PowerShell command and return its output. This is your PRIMARY tool — prefer it over screenshot/click for anything doable from the command line. Commands run via powershell.exe directly (NOT bash, NOT cmd.exe): write PowerShell syntax — chain with `;` (NOT `&&`), use cmdlets (Get-ChildItem, Get-Content, Set-Content), `$env:VAR` for env vars, and full .exe paths for built-in apps (e.g. C:\\Windows\\System32\\calc.exe) to avoid the Store redirect. Do NOT wrap commands in `powershell -Command "..."` — you are already in PowerShell.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              command: { type: 'string', description: 'The PowerShell command to execute.' },
+            },
+            required: ['command'],
+          },
+        } as unknown as Anthropic.Beta.BetaTool)
+      : ({
+          type: 'bash_20250124' as unknown as 'bash_20241022',
+          name: 'bash',
+        } as unknown as Anthropic.Beta.BetaTool),
     {
       type: 'text_editor_20250728' as unknown as 'text_editor_20241022',
       name: 'str_replace_based_edit_tool',
@@ -445,7 +466,7 @@ function dryRunStub(toolName: string, action: string | undefined, input: Record<
         return `[dry-run] would invoke computer action: ${action}`;
     }
   }
-  if (toolName === 'bash') {
+  if (toolName === 'bash' || toolName === 'powershell') {
     const cmd = (input['command'] as string | undefined) ?? '';
     return `[dry-run] would execute: ${cmd.length > 120 ? cmd.slice(0, 120) + '...' : cmd}`;
   }
@@ -473,9 +494,9 @@ export function summarizeToolArgs(toolName: string, input: Record<string, unknow
 
 /** Describe a non-computer tool call when `action` isn't present. */
 function describeCall(toolName: string, input: Record<string, unknown>): string {
-  if (toolName === 'bash') {
+  if (toolName === 'bash' || toolName === 'powershell') {
     const cmd = input['command'] as string | undefined;
-    return cmd ? cmd.slice(0, 60) : 'bash';
+    return cmd ? cmd.slice(0, 60) : toolName;
   }
   if (toolName === 'read_page') {
     const url = input['url'] as string | undefined;
@@ -892,9 +913,9 @@ async function executeComputerActionInner(
       default:
         return [{ type: 'text', text: `Unknown computer action: ${action}. Supported: ${SUPPORTED_COMPUTER_ACTIONS.join(', ')}.` }];
     }
-  } else if (toolName === 'bash') {
+  } else if (toolName === 'bash' || toolName === 'powershell') {
     const command = input['command'] as string;
-    output.action('bash', command);
+    output.action(toolName, command);
 
     // Guardrail check — block dangerous commands. THROW rather than return:
     // the loop turns the throw into an error tool_result for the model, and
@@ -908,7 +929,16 @@ async function executeComputerActionInner(
 
     const { execSync } = await import('node:child_process');
     try {
-      const result = execSync(command, { timeout: 30000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
+      // PowerShell runs via powershell.exe directly (matching the macro
+      // executor in macro-run.ts). -EncodedCommand carries the command as
+      // UTF-16LE base64 so it survives cmd's line-splitting — multiline
+      // PowerShell runs reliably where a raw execSync (→ cmd.exe) would not.
+      // A `powershell` tool call recorded here replays $0 through that same
+      // executor. `bash` on Unix keeps the plain execSync path.
+      const result = toolName === 'powershell'
+        ? execSync(`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodePowerShellCommand(command)}`,
+            { timeout: 30000, encoding: 'utf-8', maxBuffer: 1024 * 1024 })
+        : execSync(command, { timeout: 30000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
       return [{ type: 'text', text: result }];
     } catch (err) {
       // Rethrow (don't swallow): a non-zero exit must reach the dispatch
