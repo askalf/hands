@@ -935,8 +935,15 @@ async function executeComputerActionInner(
       // PowerShell runs reliably where a raw execSync (→ cmd.exe) would not.
       // A `powershell` tool call recorded here replays $0 through that same
       // executor. `bash` on Unix keeps the plain execSync path.
+      // `; exit $LASTEXITCODE` is load-bearing, not tidiness. execSync only
+      // throws when the SPAWNED process exits non-zero — and powershell.exe
+      // itself exits 0 even when the command inside it failed. Without this,
+      // a failed command returns normally, the catch below never fires, and
+      // --record / --heal crystallize a FAILED step into a macro as ok:true:
+      // the exact silent-failure class this PR exists to remove. verify.ts
+      // appends the same suffix for the same reason.
       const result = toolName === 'powershell'
-        ? execSync(`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodePowerShellCommand(command)}`,
+        ? execSync(`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodePowerShellCommand(command + '\n; exit $LASTEXITCODE')}`,
             { timeout: 30000, encoding: 'utf-8', maxBuffer: 1024 * 1024 })
         : execSync(command, { timeout: 30000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
       return [{ type: 'text', text: result }];
