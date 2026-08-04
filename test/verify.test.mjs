@@ -41,6 +41,18 @@ test('runVerifyCheck — guardrail-blocked command never executes', () => {
   assert.match(r.output, /guardrail/);
 });
 
+test('runVerifyCheck — on Windows, a PowerShell-only check runs in PowerShell (not cmd.exe)', { skip: process.platform !== 'win32' ? 'windows-only' : false }, () => {
+  // $PSVersionTable exists only in PowerShell. Pre-fix this ran via cmd.exe
+  // and failed ("wrong shell context"); now it must exit 0 as a real check.
+  const pass = runVerifyCheck('if ($PSVersionTable.PSVersion.Major -ge 5) { exit 0 } else { exit 9 }');
+  assert.equal(pass.ok, true);
+  assert.equal(pass.exitCode, 0);
+  // And a PowerShell command that exits non-zero must be reported as failed.
+  const fail = runVerifyCheck('exit 4');
+  assert.equal(fail.ok, false);
+  assert.equal(fail.exitCode, 4);
+});
+
 test('formatVerifyResult — VERIFIED vs FAILED phrasing', () => {
   assert.match(formatVerifyResult('file exists', { ok: true, exitCode: 0, output: '' }), /VERIFIED/);
   const f = formatVerifyResult('file exists', { ok: false, exitCode: 1, output: 'nope' });
