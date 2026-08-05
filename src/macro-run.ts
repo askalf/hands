@@ -211,7 +211,13 @@ async function runStep(step: MacroStep, scaleFactor: number): Promise<void> {
     if (guard.blocked) throw new Error(`guardrail blocked: ${guard.reason}`);
     // -EncodedCommand survives cmd's line-splitting: multiline PowerShell
     // replays reliably where multiline bash (execSync → cmd) does not.
-    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodePowerShellCommand(command)}`,
+    // `; exit $LASTEXITCODE` is load-bearing, not tidiness: execSync only
+    // throws when the SPAWNED process exits non-zero, and powershell.exe
+    // itself exits 0 even when the command inside it failed. Without this,
+    // a failed step returns normally, gets appendAudit'd as ok:true, and
+    // replays as "known good" on every future $0 run — sdk-mode.ts and
+    // verify.ts append the same suffix for the same reason.
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodePowerShellCommand(command + '\n; exit $LASTEXITCODE')}`,
       { timeout: 30_000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
     return;
   }
