@@ -14,6 +14,12 @@
   <a href="https://github.com/askalf/hands/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@askalf/hands" alt="License"></a>
 </p>
 
+<!-- hands on Glama — uncomment once the server is indexed in the directory (submit at https://glama.ai/mcp/servers; glama.json is already in place):
+<p align="center">
+  <a href="https://glama.ai/mcp/servers/askalf/hands"><img src="https://glama.ai/mcp/servers/askalf/hands/badges/card.svg" alt="hands on Glama"></a>
+</p>
+-->
+
 ---
 
 ## What you keep
