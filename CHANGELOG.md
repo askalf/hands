@@ -11,6 +11,16 @@ checklist.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-08-07
+
+Minor bump: new `-e/--effort` flag on `hands run` and `hands config` (#166).
+
+### Fixed
+- **CLI mode pins model and effort instead of inheriting the human's interactive default.** `buildClaudeArgs` never passed `--model` or `--effort`, so every unattended run took whatever was set in the device owner's `~/.claude/settings.json`. Two consequences, both found while auditing 30 days of local Claude Code transcripts to explain fast subscription burn. First, `-m/--model` was **advertised but dead** in Claude Login mode — `config.model` (`claude-sonnet-5`) only ever reached SDK mode, which is why one box's hands sessions span `sonnet-5`, `opus-5` *and* `opus-4-8` with nobody having chosen that; they were tracking the human's interactive default as it drifted week to week. Second, inherited effort compounds: thinking blocks were the largest single contributor to context in the heaviest session audited (1.3MB of thinking vs 400KB for *all* tool results combined), and a session's context is re-read on **every later turn**, so an inherited `xhigh` is paid again each turn rather than once. A human switching to a 1M-context Opus at xhigh for their own work silently re-priced every headless run on the same machine. Both flags now ride along with `--resume` too — the CLI does not persist them across resumes, so a continued session would otherwise drop back to the inherited default.
+
+### Added
+- **`effort` config key**, defaulting to `medium` — dispatch work is mostly mechanical. Override per-run with `hands run -e high`, persist with `hands config --effort high`; `hands status` shows the effective value. Unknown levels are rejected at parse time rather than passed through: a bad level kills the `claude` child before a single turn, and persisting one would break every later run identically — the same reasoning as the existing NaN-budget guard.
+
 ## [0.25.0] - 2026-08-02
 
 The daemon's `--do` task actions — the fully unattended form, no TTY, running whatever a job's trigger fires — can now be gated through warden's policy firewall. Minor bump: new `--warden`/`--judge` capability on a previously ungated execution path (#153).
