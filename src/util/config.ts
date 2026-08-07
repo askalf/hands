@@ -8,10 +8,22 @@ export interface VoiceOptions {
   silenceDurationMs: number;
 }
 
+/** Reasoning effort levels the `claude` CLI accepts for `--effort`. */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = typeof EFFORT_LEVELS[number];
+
 export interface AgentConfig {
   authMode: 'api_key' | 'oauth';
   apiKey?: string | undefined;
   model: string;
+  /**
+   * Reasoning effort for spawned `claude` children. Pinned rather than
+   * inherited: without `--effort` the child picks up whatever the human's
+   * interactive `effortLevel` happens to be, and thinking blocks are the
+   * single largest contributor to a session's context — which is re-read
+   * on every subsequent turn.
+   */
+  effort: EffortLevel;
   maxBudgetUsd: number;
   maxTurns: number;
   voice?: VoiceOptions;
@@ -27,6 +39,10 @@ const DEFAULT_CONFIG: AgentConfig = {
   // claude-sonnet-5 (was claude-sonnet-4-6 — one generation behind). Verified
   // live in oauth mode before this change (real response, $0 via subscription).
   model: 'claude-sonnet-5',
+  // Dispatch work is mostly mechanical; medium keeps thinking (and so the
+  // per-turn context every later turn re-reads) down. Raise per-run with
+  // `hands run --effort high`, or persist with `hands config --effort high`.
+  effort: 'medium',
   maxBudgetUsd: 5.0,
   maxTurns: 50,
 };

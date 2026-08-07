@@ -1,6 +1,6 @@
-import type { AgentConfig } from './config.js';
+import { EFFORT_LEVELS, type AgentConfig, type EffortLevel } from './config.js';
 
-export type RunOverrides = Partial<Pick<AgentConfig, 'model' | 'maxBudgetUsd' | 'maxTurns'>>;
+export type RunOverrides = Partial<Pick<AgentConfig, 'model' | 'effort' | 'maxBudgetUsd' | 'maxTurns'>>;
 
 export interface OverrideParseResult {
   ok: boolean;
@@ -19,12 +19,22 @@ export interface OverrideParseResult {
  * which crashed every subsequent SDK run until the file was
  * hand-edited.
  */
-export function parseOverrides(raw: { model?: string; budget?: string; turns?: string }): OverrideParseResult {
+export function parseOverrides(raw: { model?: string; effort?: string; budget?: string; turns?: string }): OverrideParseResult {
   const overrides: RunOverrides = {};
   const errors: string[] = [];
 
   if (raw.model !== undefined) {
     overrides.model = raw.model;
+  }
+  if (raw.effort !== undefined) {
+    // Validated against the allowlist rather than passed through: an
+    // unknown level makes the `claude` child exit before a single turn,
+    // and persisting it would break every later run the same way.
+    if ((EFFORT_LEVELS as readonly string[]).includes(raw.effort)) {
+      overrides.effort = raw.effort as EffortLevel;
+    } else {
+      errors.push(`--effort must be one of ${EFFORT_LEVELS.join(', ')}, got "${raw.effort}"`);
+    }
   }
   if (raw.budget !== undefined) {
     const budget = Number(raw.budget);
