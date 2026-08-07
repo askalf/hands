@@ -58,6 +58,7 @@ program
   .description('Run the agent with a natural language prompt')
   .argument('[prompt]', 'What you want the agent to do (optional with --continue)')
   .option('-m, --model <model>', 'Model to use (this run only; persist with `hands config --model`)')
+  .option('-e, --effort <level>', 'Reasoning effort: low, medium, high, xhigh, max (this run only; persist with `hands config --effort`)')
   .option('-b, --budget <amount>', 'Max budget in USD (this run only; persist with `hands config --budget`)')
   .option('-t, --turns <count>', 'Max turns (this run only; persist with `hands config --turns`)')
   .option('-v, --voice', 'Use voice input (microphone → whisper transcription)')
@@ -95,6 +96,7 @@ program
       if (opts.json) process.env['HANDS_QUIET'] = '1';
       const parsedRecipeOv = parseOverrides({
         ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
         ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
         ...(opts.turns !== undefined ? { turns: opts.turns } : {}),
       });
@@ -145,12 +147,13 @@ program
       // decorative through the existing quiet mechanism.
       process.env['HANDS_QUIET'] = '1';
     }
-    // -m/-b/-t apply to this run only — `hands config` is the
+    // -m/-e/-b/-t apply to this run only — `hands config` is the
     // persistence path. (They used to be written straight to
     // config.json, unvalidated, so `-b abc` persisted a NaN budget
     // that crashed every later SDK run.)
     const parsed = parseOverrides({
       ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
       ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
       ...(opts.turns !== undefined ? { turns: opts.turns } : {}),
     });
@@ -216,6 +219,7 @@ program
     console.log();
     console.log(chalk.dim('Auth mode:'), config.authMode ?? 'not configured');
     console.log(chalk.dim('Model:'), config.model);
+    console.log(chalk.dim('Effort:'), config.effort);
     console.log(chalk.dim('Budget:'), `$${config.maxBudgetUsd.toFixed(2)}`);
     console.log(chalk.dim('Max turns:'), config.maxTurns);
     // The checkCommand blocklist gates SDK-mode bash (and audit
@@ -1096,11 +1100,13 @@ program
   .command('config')
   .description('Update configuration')
   .option('-m, --model <model>', 'Default model')
+  .option('-e, --effort <level>', 'Default reasoning effort: low, medium, high, xhigh, max')
   .option('-b, --budget <amount>', 'Default max budget in USD')
   .option('-t, --turns <count>', 'Default max turns')
   .action(async (opts) => {
     const parsed = parseOverrides({
       ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
       ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
       ...(opts.turns !== undefined ? { turns: opts.turns } : {}),
     });

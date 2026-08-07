@@ -387,6 +387,14 @@ export interface ClaudeArgsOptions {
   prompt: string;
   systemPrompt: string;
   maxTurns: number;
+  /**
+   * Model for the child. Omitted only if config carries no model — the
+   * flag is what stops a headless run from silently inheriting whatever
+   * the human last picked interactively (e.g. a 1M-context Opus).
+   */
+  model?: string | undefined;
+  /** Reasoning effort for the child. Same inheritance problem as `model`. */
+  effort?: string | undefined;
   mcpConfigPath: string;
   /** Settings file carrying the PreToolUse guardrail hook. */
   settingsPath?: string | undefined;
@@ -408,6 +416,12 @@ export function buildClaudeArgs(o: ClaudeArgsOptions): string[] {
     ...(o.resumeSessionId ? ['--resume', o.resumeSessionId] : []),
     '-p', o.prompt,
     '--append-system-prompt', o.systemPrompt,
+    // Pin model and effort explicitly. Without these the child inherits
+    // the interactive default from ~/.claude/settings.json, so a human
+    // switching to a 1M-context Opus at xhigh silently re-priced every
+    // unattended `hands run` too.
+    ...(o.model ? ['--model', o.model] : []),
+    ...(o.effort ? ['--effort', o.effort] : []),
     // stream-json (not json): we want the live event feed — real
     // tool_use blocks for action lines and the audit log, plus the
     // session id — instead of one opaque envelope at exit.
@@ -451,6 +465,8 @@ async function spawnClaude(prompt: string, config: AgentConfig, opts: SpawnClaud
       prompt,
       systemPrompt,
       maxTurns: config.maxTurns,
+      model: config.model,
+      effort: config.effort,
       mcpConfigPath: opts.mcpConfigPath,
       settingsPath: opts.settingsPath,
       resumeSessionId: opts.resumeSessionId,
