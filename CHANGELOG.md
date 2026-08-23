@@ -11,6 +11,15 @@ checklist.
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-08-23
+
+Patch bump: dependency and CI-action maintenance only — no runtime behavior change (#167, #168, #169).
+
+### Changed
+
+- `@anthropic-ai/sdk` `^0.115.0` → `^0.117.1`.
+- Pinned action digests refreshed: `actions/attest-build-provenance` v4.1.1 → v4.2.2 (the release-provenance attestation in `auto-release.yml`), and the three `github/codeql-action` steps (`init`, `autobuild`, `analyze`) moved together to `ff2f1c6` — init and analyze have to land on the same version or the CodeQL run fails.
+
 ## [0.26.0] - 2026-08-07
 
 Minor bump: new `-e/--effort` flag on `hands run` and `hands config` (#166).
