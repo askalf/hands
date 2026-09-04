@@ -43,8 +43,10 @@
     "@hono/node-server": "^2.0.5",
     "fast-uri": "^3.1.7",
     "hono": "^4.12.34",
+    "qs": "^6.16.0",
     "undici": "^7.29.0",
     "brace-expansion": "^1.1.16",
+    "browserslist": "^4.28.7",
     "tar": "^7.5.22"
   },
   "peerDependencies": {
